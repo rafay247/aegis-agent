@@ -26,9 +26,6 @@ async function touchSession(sessionId: string) {
 }
 
 export async function saveChatMessages(sessionId: string, messages: ChatMessage[]) {
-  const state = getSessionState(sessionId);
-  state.messages.push(...messages);
-
   const pool = getPostgresPool();
 
   if (!pool || messages.length === 0) {
@@ -56,6 +53,24 @@ export async function saveChatMessages(sessionId: string, messages: ChatMessage[
   }
 
   return messages;
+}
+
+export async function deleteSessionData(sessionId: string) {
+  const pool = getPostgresPool();
+
+  if (!pool) {
+    return;
+  }
+
+  try {
+    await ensurePostgresSchema();
+    await pool.query("DELETE FROM aegis_research_runs WHERE session_id = $1;", [sessionId]);
+    await pool.query("DELETE FROM aegis_messages WHERE session_id = $1;", [sessionId]);
+    await pool.query("DELETE FROM aegis_sessions WHERE session_id = $1;", [sessionId]);
+    databaseStatus.connected = true;
+  } catch {
+    databaseStatus.connected = false;
+  }
 }
 
 export async function listSessionMessages(sessionId: string, limit = 20) {
@@ -100,9 +115,6 @@ export async function listSessionMessages(sessionId: string, limit = 20) {
 }
 
 export async function saveResearchRun(run: ResearchRun) {
-  const state = getSessionState(run.sessionId);
-  state.runs.unshift(run);
-
   const pool = getPostgresPool();
 
   if (!pool) {

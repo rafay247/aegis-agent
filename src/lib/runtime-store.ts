@@ -1,8 +1,9 @@
-import type { ChatMessage, ResearchRun } from "@/types";
+import type { ChatMessage, ConversationSummary, ResearchRun } from "@/types";
 
 type SessionState = {
   messages: ChatMessage[];
   runs: ResearchRun[];
+  summary?: ConversationSummary;
 };
 
 declare global {
@@ -32,4 +33,12 @@ export function getSessionState(sessionId: string): SessionState {
 
   store.set(sessionId, created);
   return created;
+}
+
+export function listSessionStates() {
+  return Array.from(getStore().values());
+}
+
+export function deleteSessionState(sessionId: string) {
+  getStore().delete(sessionId);
 }

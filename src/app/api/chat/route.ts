@@ -16,7 +16,8 @@ export async function POST(request: Request) {
 
   const response = await runAgent({
     sessionId: body.sessionId,
-    message: body.message.trim()
+    message: body.message.trim(),
+    useWebSearch: Boolean(body.useWebSearch)
   });
 
   return NextResponse.json(response);

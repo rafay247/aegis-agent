@@ -52,9 +52,16 @@ export type ResearchRun = {
   usedModel: string;
 };
 
+export type ConversationSummary = {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+};
+
 export type ChatRequest = {
   sessionId: string;
   message: string;
+  useWebSearch?: boolean;
 };
 
 export type ChatResponse = {
