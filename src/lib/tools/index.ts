@@ -5,10 +5,14 @@ export const toolRegistry = ["searchWeb", "retrieveKnowledge"];
 
 function cleanSearchContent(content: string | undefined) {
   const cleanedContent = (content ?? "No snippet returned.")
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-    .replace(/\[[^\]]+\]\([^)]+\)/g, "")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "") // markdown images
+    .replace(/\[\[?[^\]]*\]?\]\([^)]+\)/g, "") // markdown / footnote links
     .replace(/\[Image[^\]]*\]/gi, "")
+    .replace(/\[\d+\]/g, "") // bare footnote refs like [46]
+    .replace(/[•·▪◦*►▶|]+/g, " ") // bullet / navigation glyphs
+    .replace(/(?:\s*[.)\]·•]\s*){3,}/g, " ") // runs of stray punctuation/dots
     .replace(/\s+/g, " ")
+    .replace(/^[\s.,;:)\]\-–—|]+/, "") // leading junk
     .trim();
 
   return cleanedContent.length > 420

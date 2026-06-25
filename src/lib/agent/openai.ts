@@ -1,60 +1,77 @@
 import { env, hasOpenAiConfig } from "@/lib/env";
-import type { ChatMessage, ResearchSource } from "@/types";
 
-type GenerateAnswerParams = {
-  question: string;
-  memory: ChatMessage[];
-  sources: ResearchSource[];
-  instructions: string;
+// Minimal typed surface over the OpenAI Chat Completions API, which has the
+// most reliable tool-calling semantics for a ReAct loop.
+
+export type ChatToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
 };
 
-export async function generateAnswerWithOpenAi({
-  question,
-  memory,
-  sources,
-  instructions
-}: GenerateAnswerParams) {
-  if (!hasOpenAiConfig()) {
-    return null;
+export type ChatModelMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+};
+
+export type ChatTool = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export { hasOpenAiConfig };
+
+const REQUEST_TIMEOUT_MS = 30000;
+
+export async function callChatModel(messages: ChatModelMessage[], tools: ChatTool[]): Promise<ChatModelMessage> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.openAiApiKey}`
+      },
+      body: JSON.stringify({
+        model: env.openAiModel,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+        tool_choice: tools.length > 0 ? "auto" : undefined,
+        temperature: 0.3
+      }),
+      // Don't let Next.js cache model calls, and abort if the model stalls.
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 
-  const memoryBlock =
-    memory.length > 0
-      ? memory.map((message) => `${message.role.toUpperCase()}: ${message.content}`).join("\n")
-      : "No recent memory.";
-
-  const sourceBlock =
-    sources.length > 0
-      ? sources
-          .map(
-            (source, index) =>
-              `[${index + 1}] ${source.title}\nURL: ${source.url}\nSnippet: ${source.snippet}\nContent: ${
-                source.content ?? "No extracted content."
-              }`
-          )
-          .join("\n\n")
-      : "No sources available.";
-
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.openAiApiKey}`
-    },
-    body: JSON.stringify({
-      model: env.openAiModel,
-      instructions,
-      input: `User question:\n${question}\n\nRecent memory:\n${memoryBlock}\n\nSources:\n${sourceBlock}\n\nWrite a grounded research answer with inline [1], [2] style references when sources are available.`
-    })
-  });
-
   if (!response.ok) {
-    throw new Error(`OpenAI request failed with status ${response.status}`);
+    const detail = await response.text().catch(() => "");
+    throw new Error(`OpenAI chat completion failed with status ${response.status}: ${detail.slice(0, 200)}`);
   }
 
   const data = (await response.json()) as {
-    output_text?: string;
+    choices?: Array<{ message?: ChatModelMessage }>;
   };
 
-  return data.output_text?.trim() ?? null;
+  const message = data.choices?.[0]?.message;
+  if (!message) {
+    throw new Error("OpenAI returned no message.");
+  }
+
+  return message;
 }

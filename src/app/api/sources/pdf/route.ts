@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     }
 
     addedSources.push(
-      addKnowledgeDocument({
+      await addKnowledgeDocument({
         title: file.name.replace(/\.pdf$/i, ""),
         text
       })
@@ -71,6 +71,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     added: addedSources,
-    sources: listKnowledgeSources()
+    sources: await listKnowledgeSources()
   });
 }

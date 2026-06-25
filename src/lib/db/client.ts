@@ -66,10 +66,17 @@ export async function ensurePostgresSchema() {
           answer TEXT NOT NULL,
           plan JSONB NOT NULL,
           citations JSONB NOT NULL,
+          steps JSONB NOT NULL DEFAULT '[]'::jsonb,
           created_at TIMESTAMPTZ NOT NULL,
           used_model TEXT NOT NULL,
           inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+      `);
+
+      // Keep older databases compatible with the agent-trace column.
+      await pool.query(`
+        ALTER TABLE aegis_research_runs
+        ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
 
       await pool.query(`

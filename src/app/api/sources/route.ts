@@ -3,7 +3,7 @@ import { addKnowledgeDocument, listKnowledgeSources } from "@/lib/rag";
 
 export async function GET() {
   return NextResponse.json({
-    sources: listKnowledgeSources()
+    sources: await listKnowledgeSources()
   });
 }
 
@@ -22,13 +22,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const source = addKnowledgeDocument({
+  const source = await addKnowledgeDocument({
     title: body.title?.trim() || "Untitled source",
     text: body.text
   });
 
   return NextResponse.json({
     source,
-    sources: listKnowledgeSources()
+    sources: await listKnowledgeSources()
   });
 }

@@ -41,6 +41,17 @@ export type ResearchAnswer = {
   citations: ResearchSource[];
 };
 
+export type AgentStepKind = "tool" | "answer";
+
+export type AgentStep = {
+  id: string;
+  kind: AgentStepKind;
+  tool?: "web_search" | "search_knowledge";
+  input?: string;
+  summary: string;
+  resultCount?: number;
+};
+
 export type ResearchRun = {
   id: string;
   sessionId: string;
@@ -48,6 +59,7 @@ export type ResearchRun = {
   answer: string;
   plan: AgentPlan;
   citations: ResearchSource[];
+  steps?: AgentStep[];
   createdAt: string;
   usedModel: string;
 };

@@ -1,16 +1,10 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatResponse, ConversationSummary, ResearchSource } from "@/types";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import type { AgentStep, ChatResponse, ConversationSummary, ResearchSource } from "@/types";
 
 const conversationsStorageKey = "aegis-conversations";
 const maxPdfSources = 3;
-const starterPrompts = [
-  "Summarize the latest AI agent frameworks",
-  "Compare LangChain, LangGraph, and LlamaIndex",
-  "Create a research brief with citations",
-  "Use my explicit sources and cite them"
-];
 
 type SavedConversation = ConversationSummary & {
   response?: ChatResponse;
@@ -37,22 +31,6 @@ function loadSavedConversations() {
     window.localStorage.removeItem(conversationsStorageKey);
     return [];
   }
-}
-
-function PanelMenu() {
-  return (
-    <span className="panel-menu" aria-hidden="true">
-      ...
-    </span>
-  );
-}
-
-function MessageIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="line-icon">
-      <path d="M5 6.5h14v9H8.5L5 19V6.5Z" />
-    </svg>
-  );
 }
 
 function SendIcon() {
@@ -103,54 +81,121 @@ function DeleteIcon() {
   );
 }
 
-function formatMessageTimestamp(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
+function SearchStepIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="step-icon">
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-3.6-3.6" />
+    </svg>
+  );
+}
+
+function DocStepIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="step-icon">
+      <path d="M7 3h7l4 4v14H7V3Z" />
+      <path d="M14 3v4h4M10 12h6M10 16h6" />
+    </svg>
+  );
+}
+
+function CheckStepIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="step-icon">
+      <path d="m5 12.5 4.5 4.5L19 7" />
+    </svg>
+  );
+}
+
+function AgentSteps({ steps }: { steps: AgentStep[] }) {
+  if (steps.length === 0) {
+    return null;
   }
 
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(date);
+  const toolSteps = steps.filter((step) => step.kind === "tool");
+  if (toolSteps.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="agent-steps" aria-label="Agent steps">
+      <div className="agent-steps-title">
+        <CheckStepIcon />
+        <span>
+          Worked through {toolSteps.length} step{toolSteps.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <ul>
+        {toolSteps.map((step) => (
+          <li key={step.id}>
+            {step.tool === "search_knowledge" ? <DocStepIcon /> : <SearchStepIcon />}
+            <span className="agent-step-text">{step.summary}</span>
+            {typeof step.resultCount === "number" ? (
+              <span className="agent-step-count">
+                {step.resultCount} result{step.resultCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="header-icon">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="header-icon">
+      <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" />
+    </svg>
+  );
+}
+
+function renderInlineContent(text: string) {
+  // Split on links and **bold** so answers read naturally.
+  const parts = text.split(/(https?:\/\/[^\s)]+|\*\*[^*]+\*\*)/g);
+
+  return parts.map((part, index) => {
+    if (part.startsWith("http")) {
+      return (
+        <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">
+          {part}
+        </a>
+      );
+    }
+
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={`bold-${index}`}>{part.slice(2, -2)}</strong>;
+    }
+
+    return part;
+  });
 }
 
 function renderMessageContent(content: string) {
   const lines = content.split("\n");
-  const sectionHeadings = new Set([
-    "Question",
-    "Overview",
-    "Highlights",
-    "Key Findings",
-    "Answer",
-    "Summary",
-    "Source Notes",
-    "Citation Links",
-    "Retrieval Path",
-    "Bottom Line",
-    "Top Stories",
-    "What To Watch"
-  ]);
   const blocks: Array<
     | { type: "heading"; text: string; key: string }
     | { type: "paragraph"; text: string; key: string }
-    | { type: "list"; items: string[]; key: string; section: string }
+    | { type: "list"; items: string[]; key: string }
   > = [];
   let paragraph: string[] = [];
   let listItems: string[] = [];
-  let currentSection = "";
 
   function flushParagraph() {
     if (paragraph.length === 0) {
       return;
     }
 
-    blocks.push({
-      type: "paragraph",
-      text: paragraph.join("\n"),
-      key: `paragraph-${blocks.length}`
-    });
+    blocks.push({ type: "paragraph", text: paragraph.join("\n"), key: `paragraph-${blocks.length}` });
     paragraph = [];
   }
 
@@ -159,12 +204,7 @@ function renderMessageContent(content: string) {
       return;
     }
 
-    blocks.push({
-      type: "list",
-      items: listItems,
-      section: currentSection,
-      key: `list-${blocks.length}`
-    });
+    blocks.push({ type: "list", items: listItems, key: `list-${blocks.length}` });
     listItems = [];
   }
 
@@ -172,8 +212,7 @@ function renderMessageContent(content: string) {
     const trimmedLine = line.trim();
     const isBullet = /^[-*]\s+/.test(trimmedLine);
     const isNumberedList = /^\d+\.\s+/.test(trimmedLine);
-    const isCitationLine = /^\[\d+\]\s+/.test(trimmedLine);
-    const isHeading = sectionHeadings.has(trimmedLine) || /^#{2,3}\s+\S/.test(trimmedLine);
+    const isHeading = /^#{2,3}\s+\S/.test(trimmedLine);
 
     if (!trimmedLine) {
       flushParagraph();
@@ -181,7 +220,7 @@ function renderMessageContent(content: string) {
       return;
     }
 
-    if (isBullet || isNumberedList || isCitationLine) {
+    if (isBullet || isNumberedList) {
       flushParagraph();
       listItems.push(trimmedLine.replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, ""));
       return;
@@ -191,12 +230,7 @@ function renderMessageContent(content: string) {
 
     if (isHeading) {
       flushParagraph();
-      blocks.push({
-        type: "heading",
-        text: trimmedLine.replace(/^#{2,3}\s+/, ""),
-        key: `heading-${blocks.length}`
-      });
-      currentSection = trimmedLine.replace(/^#{2,3}\s+/, "");
+      blocks.push({ type: "heading", text: trimmedLine.replace(/^#{2,3}\s+/, ""), key: `heading-${blocks.length}` });
       return;
     }
 
@@ -206,60 +240,16 @@ function renderMessageContent(content: string) {
   flushParagraph();
   flushList();
 
-  function renderInlineContent(text: string) {
-    const parts = text.split(/(https?:\/\/[^\s)]+)/g);
-
-    return parts.map((part, index) =>
-      part.startsWith("http") ? (
-        <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">
-          {part}
-        </a>
-      ) : (
-        part
-      )
-    );
-  }
-
-  function renderListItem(item: string, section: string) {
-    const citationMatch = item.match(/^(\[\d+\])\s+(.+?)\s+-\s+(https?:\/\/\S+)$/);
-
-    if (section === "Citation Links" && citationMatch) {
-      const [, indexLabel, title, url] = citationMatch;
-      let domain = "Open source";
-
-      try {
-        domain = new URL(url).hostname.replace(/^www\./, "");
-      } catch {
-        domain = "Open source";
-      }
-
-      return (
-        <span className="citation-link-item">
-          <span>
-            <strong>{indexLabel}</strong>
-            {title}
-          </span>
-          <a href={url} target="_blank" rel="noreferrer">
-            {domain}
-          </a>
-        </span>
-      );
-    }
-
-    return renderInlineContent(item);
-  }
-
   return blocks.map((block) => {
     if (block.type === "heading") {
       return <h3 key={block.key}>{block.text}</h3>;
     }
 
     if (block.type === "list") {
-      const sectionClass = block.section.toLowerCase().replace(/\s+/g, "-");
       return (
-        <ul key={block.key} className={`message-list ${sectionClass ? `message-list-${sectionClass}` : ""}`}>
+        <ul key={block.key} className="message-list">
           {block.items.map((item, index) => (
-            <li key={`${item}-${index}`}>{renderListItem(item, block.section)}</li>
+            <li key={`${item}-${index}`}>{renderInlineContent(item)}</li>
           ))}
         </ul>
       );
@@ -285,7 +275,24 @@ export default function Home() {
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("aegis-theme");
+    if (stored === "light" || stored === "dark") {
+      setTheme(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("aegis-theme", theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
+  }
 
   useEffect(() => {
     const conversations = loadSavedConversations();
@@ -343,16 +350,7 @@ export default function Home() {
   const messages = response?.messages ?? [];
   const visibleMessages = optimisticMessages.length > 0 ? optimisticMessages : messages;
   const sources = response?.citations ?? [];
-
-  const statusTime = useMemo(
-    () =>
-      new Intl.DateTimeFormat("en", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      }).format(new Date()),
-    []
-  );
+  const latestSteps = response?.run?.steps ?? [];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -416,9 +414,6 @@ export default function Home() {
     }
   }
 
-  function selectStarterPrompt(starterPrompt: string) {
-    setPrompt(starterPrompt);
-  }
 
   function handlePdfSelection(files: FileList | null) {
     if (!files) {
@@ -584,7 +579,6 @@ export default function Home() {
     <main className="app-frame">
       <aside className="history-sidebar" aria-label="Conversation history">
         <div className="history-brand">
-          <span className="brand-glyph">A</span>
           <span>Aegis</span>
         </div>
 
@@ -703,129 +697,106 @@ export default function Home() {
       ) : null}
 
       <div className="aegis-workspace">
-        <header className="system-bar">
-        <div className="brand-lockup">
-          <span className="brand-glyph">A</span>
-          <span>AEGIS <strong>AGENT</strong></span>
-        </div>
-        <div className="system-status">
-          <span className="time-chip">{statusTime}</span>
-          <span className="signal-chip" title="Network signal">
-            <span className="signal-bars" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-            Online
-          </span>
-        </div>
+        <header className="top-header">
+          <div className="top-header-title">
+            Aegis
+            <span className="top-header-tag">Research</span>
+          </div>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            title={theme === "dark" ? "Light mode" : "Dark mode"}
+          >
+            {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+          </button>
         </header>
-
-        <section className="mission-grid">
-        <aside className="glass-panel citations-column" aria-label="Active citations">
-          <div className="panel-header">
-            <h2>Active Citations</h2>
-            <PanelMenu />
-          </div>
-          <div className="citation-list">
-            {sources.length > 0 ? (
-              sources.slice(0, 5).map((source, index) => (
-                <article key={source.id} className="citation-card">
-                  <div className="citation-index">{index + 1}.</div>
-                  <div className="citation-body">
-                    <h3>
-                      {source.url.startsWith("http") ? (
-                        <a href={source.url} target="_blank" rel="noreferrer">
-                          {source.title}
-                        </a>
-                      ) : (
-                        source.title
-                      )}
-                    </h3>
-                    <p>{source.snippet || `${source.kind} source from ${source.domain}`}</p>
-                    <div className="citation-meta-row">
-                      {source.url.startsWith("http") ? (
-                        <a href={source.url} target="_blank" rel="noreferrer">
-                          {source.domain}
-                        </a>
-                      ) : (
-                        <span className="citation-source-label">{source.domain}</span>
-                      )}
-                      {source.publishedAt ? <time dateTime={source.publishedAt}>{source.publishedAt}</time> : null}
-                    </div>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <div className="citation-empty-state">
-                <h3>No citations yet</h3>
-                <p>Ask a question to populate this panel with real sources from the response.</p>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <section className="glass-panel chat-console" aria-label="Conversational agent">
-          <div className="panel-header chat-heading">
-            <div>
-              <h2>Aegis</h2>
-              <span>{visibleMessages.length > 0 ? `${visibleMessages.length} messages` : "Research chat"}</span>
-            </div>
-            <div className="heading-tools">
-              <MessageIcon />
-              <PanelMenu />
-            </div>
-          </div>
-
+        <section className="chat-console" aria-label="Conversational agent">
           <div className="conversation-scroll">
             {visibleMessages.length === 0 ? (
               <div className="chat-empty-state">
-                <span className="chat-empty-logo">A</span>
-                <h3>Aegis</h3>
+                <h3>Meet Aegis</h3>
                 <p>
-                  Aegis is a Research AI Agent designed to answer questions that require fresh
-                  information, retrieved knowledge, short-term memory, and high-quality synthesis.
+                  A research agent that finds fresh information, reads your own sources, remembers the
+                  conversation, and writes grounded answers with citations.
                 </p>
-                <div className="starter-prompt-grid" aria-label="Starter prompts">
-                  {starterPrompts.map((starterPrompt) => (
-                    <button key={starterPrompt} type="button" onClick={() => selectStarterPrompt(starterPrompt)}>
-                      {starterPrompt}
-                    </button>
-                  ))}
+                <div className="capability-grid" aria-label="What Aegis can do">
+                  <div className="capability-card">
+                    <h4>Live web research</h4>
+                    <p>Turn on Smart Search and Aegis searches the web, then synthesizes an answer with linked sources.</p>
+                  </div>
+                  <div className="capability-card">
+                    <h4>Your own sources</h4>
+                    <p>Attach text or PDFs and Aegis answers from your documents using retrieval (RAG).</p>
+                  </div>
+                  <div className="capability-card">
+                    <h4>Conversation memory</h4>
+                    <p>Aegis keeps recent context so you can ask natural follow-up questions.</p>
+                  </div>
+                  <div className="capability-card">
+                    <h4>Cited synthesis</h4>
+                    <p>Answers come back as clear prose with inline [1] citations — not a list of links.</p>
+                  </div>
                 </div>
               </div>
             ) : (
-              visibleMessages.map((message) => (
-                <article
-                  key={message.id}
-                  className={`chat-message ${message.role === "assistant" ? "assistant-message" : "user-message"}`}
-                >
-                  <div className="message-avatar" aria-hidden="true">
-                    {message.role === "assistant" ? "A" : "Y"}
-                  </div>
-                  <div className="message-body">
-                    <div className="message-meta">
-                      <span>{message.role === "assistant" ? "Aegis" : "You"}</span>
-                      <time dateTime={message.createdAt}>{formatMessageTimestamp(message.createdAt)}</time>
+              visibleMessages.map((message, messageIndex) => {
+                const isLastAssistant =
+                  message.role === "assistant" && messageIndex === visibleMessages.length - 1;
+
+                return (
+                  <article
+                    key={message.id}
+                    className={`chat-message ${message.role === "assistant" ? "assistant-message" : "user-message"}`}
+                  >
+                    <div className="message-body">
+                      {isLastAssistant && optimisticMessages.length === 0 ? (
+                        <AgentSteps steps={latestSteps} />
+                      ) : null}
+                      <div className="message-content">{renderMessageContent(message.content)}</div>
+                      {isLastAssistant && sources.length > 0 ? (
+                        <div className="source-strip" aria-label="Sources">
+                          {sources.slice(0, 6).map((source, index) =>
+                            source.url.startsWith("http") ? (
+                              <a
+                                key={source.id}
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="source-chip"
+                                title={source.title}
+                              >
+                                <span className="source-chip-index">{index + 1}</span>
+                                {source.domain}
+                              </a>
+                            ) : (
+                              <span key={source.id} className="source-chip" title={source.title}>
+                                <span className="source-chip-index">{index + 1}</span>
+                                {source.domain}
+                              </span>
+                            )
+                          )}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="message-content">{renderMessageContent(message.content)}</div>
-                  </div>
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
 
             {isLoading ? (
               <article className="chat-message assistant-message">
-                <div className="message-avatar" aria-hidden="true">A</div>
                 <div className="message-body">
-                  <div className="message-meta">
-                    <span>Aegis</span>
-                    <time>thinking</time>
-                  </div>
-                  <div className="typing-bar" aria-label="Aegis is typing">
-                    <span />
-                    <span />
-                    <span />
+                  <div className="agent-thinking" aria-label="Aegis is researching">
+                    <div className="typing-bar">
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                    <span className="agent-thinking-label">
+                      {useWebSearch ? "Researching the web…" : "Thinking…"}
+                    </span>
                   </div>
                 </div>
               </article>
@@ -870,8 +841,6 @@ export default function Home() {
               </div>
             </div>
           </form>
-        </section>
-
         </section>
       </div>
     </main>

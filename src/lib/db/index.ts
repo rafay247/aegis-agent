@@ -133,10 +133,11 @@ export async function saveResearchRun(run: ResearchRun) {
           answer,
           plan,
           citations,
+          steps,
           created_at,
           used_model
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9)
         ON CONFLICT (id) DO NOTHING;
       `,
       [
@@ -146,6 +147,7 @@ export async function saveResearchRun(run: ResearchRun) {
         run.answer,
         JSON.stringify(run.plan),
         JSON.stringify(run.citations),
+        JSON.stringify(run.steps ?? []),
         run.createdAt,
         run.usedModel
       ]
@@ -175,11 +177,12 @@ export async function listResearchRuns(sessionId: string) {
       answer: string;
       plan: ResearchRun["plan"];
       citations: ResearchRun["citations"];
+      steps: ResearchRun["steps"];
       created_at: string;
       used_model: string;
     }>(
       `
-        SELECT id, session_id, question, answer, plan, citations, created_at, used_model
+        SELECT id, session_id, question, answer, plan, citations, steps, created_at, used_model
         FROM aegis_research_runs
         WHERE session_id = $1
         ORDER BY created_at DESC;
@@ -196,6 +199,7 @@ export async function listResearchRuns(sessionId: string) {
       answer: row.answer,
       plan: row.plan,
       citations: row.citations,
+      steps: row.steps ?? [],
       createdAt: new Date(row.created_at).toISOString(),
       usedModel: row.used_model
     }));

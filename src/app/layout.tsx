@@ -12,7 +12,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head>
+        <script
+          // Apply the saved theme before paint to avoid a flash of the wrong theme.
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var t=localStorage.getItem('aegis-theme');if(t==='light'||t==='dark'){document.documentElement.dataset.theme=t;}}catch(e){}"
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );
