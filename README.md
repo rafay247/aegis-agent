@@ -4,6 +4,22 @@ Aegis is a **ReAct research agent**: it answers questions that need fresh inform
 
 Ask it something and turn on **Smart Search** — the model itself decides what to search, runs the searches (often several, refining as it goes), reads the results, and writes a clear answer with inline `[1]` citations. The UI shows the agent's actual steps as it works.
 
+## Demo
+
+![Aegis research agent demo](docs/media/aegis-demo.gif)
+
+> The clip above shows a full turn: turning on Smart Search, asking a question, the agent searching the web, and a grounded answer with inline citations and source chips. A higher-quality [MP4 version](docs/media/aegis-demo.mp4) is also included.
+
+### Screenshots
+
+| Home | Answer with citations |
+|---|---|
+| ![Home](docs/screenshots/01-home.png) | ![Cited answer with agent steps and source chips](docs/screenshots/03-answer-cited.png) |
+
+| Agent researching | Light theme |
+|---|---|
+| ![Agent researching indicator](docs/screenshots/02-researching.png) | ![Light theme](docs/screenshots/04-light-theme.png) |
+
 ## Highlights
 
 - **Autonomous agent loop** — a true ReAct cycle over OpenAI function-calling. The model picks tools, can call them multiple times, observes results, and stops when it has enough to answer (capped at 5 iterations).
