@@ -11,3 +11,10 @@ pnpm-debug.log*
 .env.production.local
 coverage
 dist
+
+# Demo video tooling (scripts/demo/README.md explains how to regenerate)
+scripts/demo/.venv
+scripts/demo/voices
+scripts/demo/raw
+scripts/demo/narration_audio
+scripts/demo/build

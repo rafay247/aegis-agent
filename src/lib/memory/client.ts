@@ -19,7 +19,15 @@ export async function getRedisClient() {
 
   if (!globalThis.__aegisRedisClient__) {
     const client = createClient({
-      url: env.redisUrl
+      url: env.redisUrl,
+      // Every other external call in this app degrades gracefully on a
+      // timeout (see the AbortController guards in lib/agent/openai.ts and
+      // lib/rag/embeddings.ts). Without these, an unreachable Redis host
+      // hangs the connect() promise forever instead of ever rejecting.
+      socket: {
+        connectTimeout: 8_000,
+        reconnectStrategy: false
+      }
     });
 
     client.on("error", () => {

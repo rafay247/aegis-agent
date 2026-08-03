@@ -6,9 +6,11 @@ Ask it something and turn on **Smart Search** — the model itself decides what 
 
 ## Demo
 
-![Aegis research agent demo](docs/media/aegis-demo.gif)
+<video src="docs/media/aegis-demo.mp4" controls width="720">
+  Your viewer doesn't support inline video — see <a href="docs/media/aegis-demo.mp4">docs/media/aegis-demo.mp4</a>.
+</video>
 
-> The clip above shows a full turn: turning on Smart Search, asking a question, the agent searching the web, and a grounded answer with inline citations and source chips. A higher-quality [MP4 version](docs/media/aegis-demo.mp4) is also included.
+> The clip above shows two flows back to back: pasting a document into RAG and asking a question answered straight from that source, then switching on Smart Search and asking a live question that Aegis researches on the web with cited sources.
 
 ### Screenshots
 

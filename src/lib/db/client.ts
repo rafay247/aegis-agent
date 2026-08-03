@@ -14,7 +14,15 @@ function createPool() {
   if (!globalThis.__aegisPostgresPool__) {
     globalThis.__aegisPostgresPool__ = new Pool({
       connectionString: env.databaseUrl,
-      max: 10
+      max: 10,
+      // Every other external call in this app degrades gracefully on a timeout
+      // (see the AbortController guards in lib/agent/openai.ts and
+      // lib/rag/embeddings.ts). Postgres needs the same treatment so a stalled
+      // connection fails fast instead of hanging the request indefinitely.
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 15_000,
+      query_timeout: 15_000
     });
   }
 
