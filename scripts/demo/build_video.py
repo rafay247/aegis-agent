@@ -1,14 +1,13 @@
 """Build docs/media/aegis-demo.mp4 (+ .gif) from raw Playwright footage and Piper narration.
 
 For each segment: speed up the raw screen recording (setpts) and the narration
-audio (atempo) to fit a fixed time budget, burn in a one-line subtitle, then
-concat the segments and render a matching gif.
+audio (atempo) to fit a fixed time budget, then concat the segments and
+render a matching gif. No subtitles — audio narration only.
 """
 
 import pathlib
-import tempfile
 
-from ffmpeg_util import FFMPEG, get_duration, run_ffmpeg
+from ffmpeg_util import get_duration, run_ffmpeg
 from narration import SEGMENTS
 
 HERE = pathlib.Path(__file__).parent
@@ -19,23 +18,6 @@ FINAL_MP4 = HERE.parent.parent / "docs" / "media" / "aegis-demo.mp4"
 FINAL_GIF = HERE.parent.parent / "docs" / "media" / "aegis-demo.gif"
 
 MAX_AUDIO_SPEEDUP = 1.3
-
-
-def format_srt_time(seconds: float) -> str:
-    ms = round(seconds * 1000)
-    hours, ms = divmod(ms, 3_600_000)
-    minutes, ms = divmod(ms, 60_000)
-    secs, ms = divmod(ms, 1000)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
-
-
-def write_srt(path: pathlib.Path, text: str, duration: float):
-    srt = (
-        "1\n"
-        f"{format_srt_time(0)} --> {format_srt_time(duration)}\n"
-        f"{text}\n"
-    )
-    path.write_text(srt)
 
 
 def build_segment(segment: dict) -> pathlib.Path:
@@ -63,43 +45,37 @@ def build_segment(segment: dict) -> pathlib.Path:
         f"audio_speedup={audio_speed:.2f}x"
     )
 
-    with tempfile.TemporaryDirectory() as tmp:
-        srt_path = pathlib.Path(tmp) / f"{name}.srt"
-        write_srt(srt_path, segment["line"], effective_target)
-
-        if video_speed_factor >= 1:
-            # Raw footage is longer than the slot: speed it up to fit.
-            video_chain = (
-                f"[0:v]setpts=PTS/{video_speed_factor},"
-                f"trim=0:{effective_target},setpts=PTS-STARTPTS"
-            )
-        else:
-            # Raw footage is already shorter than the slot: keep natural speed
-            # and freeze on the last frame instead of slowing it down.
-            pad_seconds = effective_target - raw_duration
-            video_chain = f"[0:v]tpad=stop_mode=clone:stop_duration={pad_seconds}"
-
-        filter_complex = (
-            f"{video_chain},"
-            f"subtitles='{srt_path}':force_style='FontName=DejaVu Sans,FontSize=22,"
-            "Outline=2,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000'[v];"
-            f"[1:a]atempo={audio_speed},apad,atrim=0:{effective_target}[a]"
+    if video_speed_factor >= 1:
+        # Raw footage is longer than the slot: speed it up to fit.
+        video_chain = (
+            f"[0:v]setpts=PTS/{video_speed_factor},"
+            f"trim=0:{effective_target},setpts=PTS-STARTPTS[v]"
         )
+    else:
+        # Raw footage is already shorter than the slot: keep natural speed
+        # and freeze on the last frame instead of slowing it down.
+        pad_seconds = effective_target - raw_duration
+        video_chain = f"[0:v]tpad=stop_mode=clone:stop_duration={pad_seconds}[v]"
 
-        run_ffmpeg(
-            [
-                "-i", str(raw_path),
-                "-i", str(wav_path),
-                "-filter_complex", filter_complex,
-                "-map", "[v]",
-                "-map", "[a]",
-                "-r", "30",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                str(out_path),
-            ]
-        )
+    filter_complex = (
+        f"{video_chain};"
+        f"[1:a]atempo={audio_speed},apad,atrim=0:{effective_target}[a]"
+    )
+
+    run_ffmpeg(
+        [
+            "-i", str(raw_path),
+            "-i", str(wav_path),
+            "-filter_complex", filter_complex,
+            "-map", "[v]",
+            "-map", "[a]",
+            "-r", "30",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            str(out_path),
+        ]
+    )
 
     return out_path
 

@@ -16,5 +16,7 @@ dist
 scripts/demo/.venv
 scripts/demo/voices
 scripts/demo/raw
+scripts/demo/assets
 scripts/demo/narration_audio
 scripts/demo/build
+scripts/demo/__pycache__

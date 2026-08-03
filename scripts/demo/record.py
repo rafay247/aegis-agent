@@ -4,8 +4,9 @@ Drives the real running app (npm run dev must already be up on
 http://localhost:3000, with real API keys in .env.local) with Playwright and
 records two segments:
 
-  1. rag    - paste a document into RAG, ask a question only it can answer.
-  2. web    - toggle Smart Search, ask a live question, show cited web sources.
+  1. rag - paste a document AND upload a PDF into RAG, then ask a question
+     that can only be answered from the PDF's content.
+  2. web - toggle Smart Search, ask a live question, show cited web sources.
 
 Output: scripts/demo/raw/rag.webm, scripts/demo/raw/web.webm
 """
@@ -16,7 +17,9 @@ import sys
 from playwright.sync_api import sync_playwright, expect
 
 BASE_URL = "http://localhost:3000"
-RAW_DIR = pathlib.Path(__file__).parent / "raw"
+HERE = pathlib.Path(__file__).parent
+RAW_DIR = HERE / "raw"
+ASSETS_DIR = HERE / "assets"
 VIEWPORT = {"width": 1280, "height": 800}
 
 RAG_TITLE = "Aegis Architecture"
@@ -28,14 +31,43 @@ RAG_TEXT = (
     "in-process runtime store whenever Redis, Postgres, or OpenAI are "
     "unavailable."
 )
+
+PDF_FILENAME = "RAG Pipeline Notes.pdf"
+PDF_TEXT = (
+    "Aegis chunks documents into roughly 1200-character pieces with a "
+    "150-character overlap. Each chunk is embedded with OpenAI's "
+    "text-embedding-3-small model, producing 1536-dimensional vectors, which "
+    "are stored in a pgvector table behind an HNSW cosine-similarity index "
+    "for fast retrieval."
+)
+
 RAG_QUESTION = (
-    "According to the loaded document, what does Aegis fall back to when "
-    "Redis or Postgres are unavailable?"
+    "According to the PDF you loaded, how many characters are in each RAG "
+    "chunk, and how much do chunks overlap?"
 )
 WEB_QUESTION = "What is the latest stable version of Node.js, and when was it released?"
 
 
-def record_rag_segment(browser):
+def generate_sample_pdf(browser) -> pathlib.Path:
+    """Render a one-page PDF with distinct content, used to demo PDF upload."""
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    pdf_path = ASSETS_DIR / PDF_FILENAME
+
+    page = browser.new_page()
+    page.set_content(
+        f"""
+        <html><body style="font-family: sans-serif; padding: 40px;">
+          <h1>RAG Pipeline Notes</h1>
+          <p>{PDF_TEXT}</p>
+        </body></html>
+        """
+    )
+    page.pdf(path=str(pdf_path), format="A4")
+    page.close()
+    return pdf_path
+
+
+def record_rag_segment(browser, pdf_path: pathlib.Path):
     context = browser.new_context(
         viewport=VIEWPORT,
         record_video_dir=str(RAW_DIR),
@@ -45,18 +77,29 @@ def record_rag_segment(browser):
     page.goto(BASE_URL)
 
     page.get_by_label("Attach sources").click()
+
+    # Part 1a: paste text content into RAG.
     page.get_by_label("Source title").fill(RAG_TITLE)
     page.get_by_label("Explicit content for RAG search").fill(RAG_TEXT)
     page.get_by_role("button", name="Add to RAG").click()
     expect(page.locator(".source-ingest-status")).to_have_text(
         "Explicit content added to RAG.", timeout=30_000
     )
+    page.wait_for_timeout(500)
+
+    # Part 1b: upload a PDF into RAG.
+    page.get_by_label(f"Upload up to 3 PDF sources").set_input_files(str(pdf_path))
+    page.get_by_role("button", name="Add to RAG").click()
+    expect(page.locator(".source-ingest-status")).to_have_text(
+        "1 PDF added to RAG.", timeout=30_000
+    )
     page.wait_for_timeout(600)
     page.locator(".source-modal-close").click()
 
+    # Part 1c: ask a question answerable only from the PDF.
     page.get_by_placeholder("Message Aegis").fill(RAG_QUESTION)
     page.get_by_label("Send message").click()
-    expect(page.locator(".agent-thinking")).to_be_hidden(timeout=60_000)
+    expect(page.locator(".agent-thinking")).to_be_hidden(timeout=90_000)
     expect(page.locator(".message-content").last).to_be_visible()
     page.wait_for_timeout(1500)
 
@@ -96,7 +139,10 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
-        rag_video = record_rag_segment(browser)
+        pdf_path = generate_sample_pdf(browser)
+        print(f"Sample PDF generated: {pdf_path}")
+
+        rag_video = record_rag_segment(browser, pdf_path)
         rag_target = RAW_DIR / "rag.webm"
         pathlib.Path(rag_video).rename(rag_target)
         print(f"RAG segment saved: {rag_target}")
