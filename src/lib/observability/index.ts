@@ -18,11 +18,20 @@ export async function tracedSpan<T>(
     return fn();
   }
 
+  let invoked = false;
+  const wrapped = () => {
+    invoked = true;
+    return fn();
+  };
+
   try {
     const { initLogger, traced } = await import("braintrust");
     initLogger({ projectName: env.braintrustProject, apiKey: env.braintrustApiKey });
-    return await traced((span) => fn(), { name, event: metadata ? { metadata } : undefined });
-  } catch {
+    return await traced((span) => wrapped(), { name, event: metadata ? { metadata } : undefined });
+  } catch (error) {
+    if (invoked) {
+      throw error;
+    }
     return fn();
   }
 }
