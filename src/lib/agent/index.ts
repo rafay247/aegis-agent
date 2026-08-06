@@ -8,6 +8,7 @@ import {
   loadRecentMessages,
   upsertConversationSummary
 } from "@/lib/memory";
+import { tracedSpan } from "@/lib/observability";
 import { listKnowledgeSources, retrieveKnowledge } from "@/lib/rag";
 import { searchWeb } from "@/lib/tools";
 import type {
@@ -55,7 +56,7 @@ const WEB_SEARCH_TOOL: ChatTool = {
   }
 };
 
-const KNOWLEDGE_TOOL: ChatTool = {
+export const KNOWLEDGE_TOOL: ChatTool = {
   type: "function",
   function: {
     name: "search_knowledge",
@@ -71,7 +72,7 @@ const KNOWLEDGE_TOOL: ChatTool = {
   }
 };
 
-function createId(prefix: string) {
+export function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -112,7 +113,7 @@ function dedupeSources(sources: ResearchSource[]) {
   });
 }
 
-function cleanSourceText(text: string, maxLength = 220) {
+export function cleanSourceText(text: string, maxLength = 220) {
   const cleanedText = text
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "") // markdown images
     .replace(/\[\[?[^\]]*\]?\]\([^)]+\)/g, "") // markdown / footnote links
@@ -202,19 +203,13 @@ type AgentResult = {
   steps: AgentStep[];
 };
 
-// The ReAct loop: the model reasons, optionally calls tools, observes the
-// results, and repeats until it decides to answer (or hits the iteration cap).
-async function runReactAgent(
-  question: string,
-  memory: ChatMessage[],
-  allowWeb: boolean,
-  knowledgeCount: number
-): Promise<AgentResult> {
+// Tracks unique sources across a run and formats them into numbered [n]
+// observation text for the model. Shared by runReactAgent and runBriefAgent
+// so both produce identically-numbered citations.
+export function createSourceRegistry() {
   const sources: ResearchSource[] = [];
   const sourceIndex = new Map<string, number>();
-  const steps: AgentStep[] = [];
 
-  // Assign each unique source a stable 1-based index and format it for the model.
   function registerSources(found: ResearchSource[]) {
     if (found.length === 0) {
       return "No results found for that query.";
@@ -235,9 +230,22 @@ async function runReactAgent(
       .join("\n\n");
   }
 
+  return { sources, registerSources };
+}
+
+// The ReAct loop: the model reasons, optionally calls tools, observes the
+// results, and repeats until it decides to answer (or hits the iteration cap).
+export async function runReactAgent(
+  question: string,
+  memory: ChatMessage[],
+  allowWeb: boolean,
+  knowledgeCount: number
+): Promise<AgentResult> {
+  const { sources, registerSources } = createSourceRegistry();
+  const steps: AgentStep[] = [];
+
   const tools: ChatTool[] = allowWeb ? [WEB_SEARCH_TOOL, KNOWLEDGE_TOOL] : [KNOWLEDGE_TOOL];
 
-  // Tell the agent what private knowledge is available so it knows to consult it.
   const knowledgeHint =
     knowledgeCount > 0
       ? ` The user has ${knowledgeCount} document(s) in their private knowledge base. If the question could relate to their own notes, products, or uploads — including vague references like "it" or "this" — call search_knowledge before answering.`
@@ -250,12 +258,11 @@ async function runReactAgent(
   ];
 
   for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration += 1) {
-    const reply = await callChatModel(messages, tools);
+    const reply = await tracedSpan("agent.model_call", () => callChatModel(messages, tools), { iteration });
     messages.push(reply);
 
     const toolCalls = reply.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      // The model chose to answer.
       steps.push({ id: createId("step"), kind: "answer", summary: "Wrote the final answer" });
       return { text: (reply.content ?? "").trim(), citations: sources, steps };
     }
@@ -268,43 +275,50 @@ async function runReactAgent(
         query = "";
       }
 
-      let observation = "No results found for that query.";
+      const startedAt = new Date();
 
       if (call.function.name === "web_search") {
-        const found = allowWeb ? await searchWeb(query) : [];
-        observation = registerSources(found);
+        const found = allowWeb ? await tracedSpan("tool.web_search", () => searchWeb(query), { query }) : [];
+        const observation = registerSources(found);
         steps.push({
           id: createId("step"),
           kind: "tool",
           tool: "web_search",
           input: query,
           summary: `Searched the web for "${query}"`,
-          resultCount: found.length
+          resultCount: found.length,
+          observation,
+          startedAt: startedAt.toISOString(),
+          durationMs: Date.now() - startedAt.getTime()
         });
+        messages.push({ role: "tool", tool_call_id: call.id, content: observation });
       } else if (call.function.name === "search_knowledge") {
-        const chunks = await retrieveKnowledge(query);
+        const chunks = await tracedSpan("tool.search_knowledge", () => retrieveKnowledge(query), { query });
         const found = chunks.map((chunk) => ({ ...chunk.source, content: chunk.text }));
-        observation = registerSources(found);
+        const observation = registerSources(found);
         steps.push({
           id: createId("step"),
           kind: "tool",
           tool: "search_knowledge",
           input: query,
           summary: `Searched your sources for "${query}"`,
-          resultCount: found.length
+          resultCount: found.length,
+          observation,
+          startedAt: startedAt.toISOString(),
+          durationMs: Date.now() - startedAt.getTime()
         });
+        messages.push({ role: "tool", tool_call_id: call.id, content: observation });
+      } else {
+        messages.push({ role: "tool", tool_call_id: call.id, content: "No results found for that query." });
       }
-
-      messages.push({ role: "tool", tool_call_id: call.id, content: observation });
     }
   }
 
-  // Iteration cap reached: force a final answer with the evidence gathered so far.
   messages.push({
     role: "user",
     content: "Give your best final answer now using what you have gathered, with inline [n] citations."
   });
-  const finalReply = await callChatModel(messages, []);
+  const finalReply = await tracedSpan("agent.model_call", () => callChatModel(messages, []), { iteration: MAX_AGENT_ITERATIONS });
   steps.push({ id: createId("step"), kind: "answer", summary: "Wrote the final answer" });
   return { text: (finalReply.content ?? "").trim(), citations: sources, steps };
 }
