@@ -87,6 +87,12 @@ export async function ensurePostgresSchema() {
         ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
 
+      // Keep older databases compatible with the structured-brief column.
+      await pool.query(`
+        ALTER TABLE aegis_research_runs
+        ADD COLUMN IF NOT EXISTS brief JSONB;
+      `);
+
       await pool.query(`
         CREATE INDEX IF NOT EXISTS aegis_research_runs_session_created_idx
         ON aegis_research_runs (session_id, created_at DESC);
