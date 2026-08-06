@@ -50,6 +50,24 @@ export type AgentStep = {
   input?: string;
   summary: string;
   resultCount?: number;
+  observation?: string;
+  startedAt?: string;
+  durationMs?: number;
+};
+
+export type BriefSectionHeading = "Overview" | "Key Findings" | "Gaps & Limitations" | "Conclusion";
+
+export type BriefSection = {
+  heading: BriefSectionHeading;
+  content: string;
+  citationIds: number[];
+};
+
+export type ResearchBrief = {
+  title: string;
+  sections: BriefSection[];
+  citations: ResearchSource[];
+  steps: AgentStep[];
 };
 
 export type ResearchRun = {
@@ -62,6 +80,18 @@ export type ResearchRun = {
   steps?: AgentStep[];
   createdAt: string;
   usedModel: string;
+  brief?: ResearchBrief;
+};
+
+export type BriefRequest = {
+  sessionId: string;
+  topic: string;
+};
+
+export type BriefResponse = {
+  sessionId: string;
+  brief: ResearchBrief;
+  run: ResearchRun;
 };
 
 export type ConversationSummary = {
