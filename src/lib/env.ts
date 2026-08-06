@@ -5,7 +5,9 @@ export const env = {
   pineconeApiKey: process.env.PINECONE_API_KEY,
   pineconeIndex: process.env.PINECONE_INDEX,
   redisUrl: process.env.REDIS_URL,
-  databaseUrl: process.env.DATABASE_URL
+  databaseUrl: process.env.DATABASE_URL,
+  braintrustApiKey: process.env.BRAINTRUST_API_KEY,
+  braintrustProject: process.env.BRAINTRUST_PROJECT ?? "aegis-agent-eval"
 };
 
 export function hasOpenAiConfig() {
@@ -22,4 +24,8 @@ export function hasRedisConfig() {
 
 export function hasDatabaseConfig() {
   return Boolean(env.databaseUrl);
+}
+
+export function hasBraintrustConfig() {
+  return Boolean(env.braintrustApiKey);
 }
