@@ -6,9 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --import tsx --test src/lib/agent/brief-sections.test.ts src/lib/rag/index.test.ts evals/scorers.test.ts",
+    "eval": "npx braintrust eval evals/agent.eval.ts",
+    "seed:knowledge": "node --import tsx scripts/seed-knowledge.ts"
   },
   "dependencies": {
+    "braintrust": "^3.27.0",
     "next": "15.3.2",
     "pg": "^8.20.0",
     "react": "19.1.0",
@@ -20,10 +24,12 @@
     "@types/pg": "^8.20.0",
     "@types/react": "19.1.6",
     "@types/react-dom": "19.1.5",
+    "autoevals": "^0.3.0",
     "eslint": "9.27.0",
     "eslint-config-next": "15.3.2",
     "pdfjs-dist": "^6.0.227",
     "tailwindcss": "3.4.17",
+    "tsx": "^4.23.9",
     "typescript": "5.8.3"
   }
 }
