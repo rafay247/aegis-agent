@@ -14,7 +14,9 @@ const userKnowledgeBase: RetrievalChunk[] = [];
 // Chunking keeps embeddings focused and improves retrieval precision.
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 150;
-const MAX_CHUNKS = 50;
+// 200 chunks comfortably covers a large single document (e.g. a 40-50 page PDF)
+// without truncating the back half of it — see src/lib/rag/index.test.ts.
+const MAX_CHUNKS = 200;
 
 function slugifyTitle(title: string) {
   return title
@@ -30,7 +32,7 @@ function createSnippet(text: string) {
   return compactText.length > 150 ? `${compactText.slice(0, 147)}...` : compactText;
 }
 
-function chunkText(text: string): string[] {
+export function chunkText(text: string): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (clean.length <= CHUNK_SIZE) {
     return clean ? [clean] : [];
