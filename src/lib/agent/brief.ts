@@ -122,7 +122,9 @@ function synthesizeBriefLocally(topic: string, chunks: RetrievalChunk[]): { sect
   }
 
   const excerpts = citations.map(
-    (source, index) => `${cleanSourceText(source.snippet || source.content || source.title, 300)} [${index + 1}]`
+    // `content` (the retrieved chunk) before `snippet` (a document-level
+    // preview) — same ordering fix as createSourceRegistry.
+    (source, index) => `${cleanSourceText(source.content || source.snippet || source.title, 300)} [${index + 1}]`
   );
 
   return {

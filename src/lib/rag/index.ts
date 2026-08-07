@@ -128,7 +128,11 @@ function keywordRetrieve(query: string, limit: number): RetrievalChunk[] {
   return userKnowledgeBase.slice(0, limit);
 }
 
-export async function retrieveKnowledge(query: string, limit = 3): Promise<RetrievalChunk[]> {
+// Default depth of 6. Three ~1200-char chunks is not enough evidence for a
+// multi-part question over a long document, and duplicate ingestions of the
+// same file (which the app allows) can consume half the slots with identical
+// text — see docs/eval-findings.md.
+export async function retrieveKnowledge(query: string, limit = 6): Promise<RetrievalChunk[]> {
   // Semantic retrieval via pgvector when available.
   if (await vectorStoreReady()) {
     const queryEmbedding = await embedText(query);

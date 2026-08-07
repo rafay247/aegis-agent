@@ -35,7 +35,8 @@ const MAX_AGENT_ITERATIONS = 5;
 const AGENT_SYSTEM_PROMPT = [
   "You are Aegis, an autonomous research agent.",
   "Decide for yourself whether you need to look things up. Call web_search for anything current, factual, statistical, or that you are not fully certain about. Call search_knowledge to consult the user's own uploaded documents and notes.",
-  "You may call tools more than once to refine or broaden your research. As soon as you have enough to answer well, stop calling tools and write the answer.",
+  "You may call tools more than once to refine or broaden your research. Before answering, check that the retrieved evidence actually covers every part of the question — a question with two or more parts usually needs one search per part. If a part is not covered, search again with different wording (narrower, or using the source's own terminology) instead of answering that part from memory.",
+  "Ground every claim in the retrieved evidence. If, after refining, the evidence still does not cover part of the question, say plainly what you could not find rather than filling the gap from prior knowledge. Once the evidence covers the question, stop calling tools and write the answer.",
   "Write a clear, direct answer in natural prose (1-3 short paragraphs; use bullets only when they genuinely help). Put inline citations like [1] or [2] immediately after the claims they support, matching the numbered sources returned by the tools.",
   "Do not add a separate 'Sources' or 'Links' section; the interface shows the sources on its own. If you could not find reliable information, say so honestly. Never invent facts or URLs."
 ].join(" ");
@@ -166,7 +167,9 @@ function synthesizeLocally(question: string, plan: AgentPlan, sources: ResearchS
 
   // Lead with the most informative excerpt as a plain-language answer; the UI
   // renders the source links as chips beneath it, so we don't list them here.
-  const leads = topSources.map((source) => extractLead(source.snippet || source.content || source.title));
+  // Same content-before-snippet ordering as registerSources: `content` is the
+  // retrieved chunk, `snippet` is only a document-level preview.
+  const leads = topSources.map((source) => extractLead(source.content || source.snippet || source.title));
 
   // Score prose quality: reward readable length, penalize number-heavy metadata
   // (subscriber/like/view counts, dates) so we prefer encyclopedic sources.
@@ -203,6 +206,12 @@ type AgentResult = {
   steps: AgentStep[];
 };
 
+// A RAG chunk is ~1200 chars (see CHUNK_SIZE in src/lib/rag/index.ts), so the
+// observation body cap has to be at least that or the model only ever sees the
+// first third of each retrieved chunk. Web snippets are already capped at 420
+// upstream, so this only widens the document path.
+const OBSERVATION_BODY_MAX = 1200;
+
 // Tracks unique sources across a run and formats them into numbered [n]
 // observation text for the model. Shared by runReactAgent and runBriefAgent
 // so both produce identically-numbered citations.
@@ -224,7 +233,14 @@ export function createSourceRegistry() {
           sourceIndex.set(source.url, index);
         }
 
-        const body = cleanSourceText(source.snippet || source.content || source.title, 420);
+        // `content` holds the actual retrieved chunk; `snippet` is only a
+        // document-level preview (the first ~150 chars of the *whole* file,
+        // identical for every chunk of that document). Preferring `snippet`
+        // here meant the model never saw the retrieved evidence for uploaded
+        // documents and answered from parametric memory instead — see
+        // docs/eval-findings.md. Web results set both to the same text, so
+        // this ordering is a no-op for them.
+        const body = cleanSourceText(source.content || source.snippet || source.title, OBSERVATION_BODY_MAX);
         return `[${index}] ${source.title} (${source.domain})\n${source.url}\n${body}`;
       })
       .join("\n\n");

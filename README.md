@@ -86,8 +86,52 @@ All integrations are optional and read from `.env.local` (centralized in [src/li
 
 > Without a valid `OPENAI_API_KEY`, Aegis still responds — but via the deterministic fallback, not the autonomous ReAct loop.
 
+## Document briefs and evaluation
+
+Beyond single-turn chat, Aegis can turn an uploaded document into a **structured
+brief**, and the whole document workflow is covered by a **Braintrust evaluation
+harness**.
+
+### Brief mode
+
+`POST /api/brief` runs [`runBriefAgent`](src/lib/agent/brief.ts) — the same ReAct
+loop, but with a stricter output contract. The agent searches the knowledge base
+(refining across up to 8 iterations), then writes Markdown with exactly four
+`##` sections: **Overview**, **Key Findings**, **Gaps & Limitations**,
+**Conclusion**. [`parseBriefSections`](src/lib/agent/brief-sections.ts) parses
+that back into typed sections, so a missing or renamed heading is a detectable
+failure rather than silently-degraded prose. The UI renders the brief alongside
+its citations and a downloadable step trace.
+
+### Eval harness
+
+```bash
+npm run seed:knowledge   # ingest the demo document (NIST AI RMF 1.0 PDF)
+npm test                 # pure-logic unit tests: parser, scorers, chunking
+npm run eval             # full Braintrust run (needs BRAINTRUST_API_KEY)
+```
+
+- **Dataset** ([evals/dataset.ts](evals/dataset.ts)) — 18 cases against the real
+  NIST AI Risk Management Framework 1.0 PDF: 6 direct factual, 5 multi-hop,
+  3 "not in the document" (should be declined, not hallucinated), and 4 brief
+  requests. Cases pinned from a real past failure carry a `"regression"` tag.
+- **Scorers** ([evals/scorers.ts](evals/scorers.ts)) — `Factuality`
+  (LLM-graded, via `autoevals`) plus three programmatic scorers:
+  `CitationValidity` (every `[n]` resolves to a retrieved source),
+  `Completeness` (all four brief sections present), and `SearchTrajectory`
+  (multi-hop cases should show real search refinement).
+- **Suite** ([evals/agent.eval.ts](evals/agent.eval.ts)) — two Braintrust
+  experiments, one per workflow, calling `runReactAgent` / `runBriefAgent`
+  directly.
+
+**[docs/eval-findings.md](docs/eval-findings.md)** writes up what the baseline
+run actually surfaced: a retrieval bug that fed the model a document title page
+instead of the retrieved chunks (chat Factuality 37.14% → 58.57%), why
+`CitationValidity` stayed at a perfect 100% the whole time it was broken, and
+why the `SearchTrajectory` scorer *dropped* once retrieval started working.
+
 ## Roadmap
 
 - Streaming the agent's steps and answer token-by-token
-- Tracing/observability (Langfuse) and a small evaluation harness
+- Evaluation harness — **done**, built on Braintrust; see [docs/eval-findings.md](docs/eval-findings.md)
 - Reranking retrieved chunks and richer chunking (sentence-aware)

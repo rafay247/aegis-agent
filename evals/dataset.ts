@@ -17,11 +17,16 @@ export const chatCases: EvalCase[] = [
       "Reliability is defined (adapted from ISO/IEC TS 5723:2022) as the ability of an item to perform as required, without failure, for a given time interval, under given conditions.",
     tags: ["direct"]
   },
+  // REGRESSION: in the baseline eval run this scored Factuality 0 (grader
+  // choice "D", disagreement) — the agent answered "Accuracy, Explainability,
+  // Privacy, Robustness, Safety, Security, Transparency" from parametric
+  // memory because the observation text handed back by search_knowledge was a
+  // document-level preview, not the retrieved chunk. See docs/eval-findings.md.
   {
     input: "List the seven characteristics of a trustworthy AI system as defined in the AI RMF.",
     expected:
       "Valid and Reliable; Safe; Secure and Resilient; Accountable and Transparent; Explainable and Interpretable; Privacy-Enhanced; and Fair - with Harmful Bias Managed.",
-    tags: ["direct"]
+    tags: ["direct", "regression"]
   },
   {
     input: "Is the AI RMF mandatory for organizations to follow?",
@@ -48,11 +53,15 @@ export const chatCases: EvalCase[] = [
       "Most users start with MAP after GOVERN, before continuing to MEASURE or MANAGE. MAP 1.1 covers understanding and documenting the AI system's intended purposes, beneficial uses, context-specific laws/norms, and deployment settings; MAP 1.2 covers ensuring interdisciplinary AI actors with demographic diversity and broad domain expertise participate in establishing that context.",
     tags: ["multi-hop"]
   },
+  // REGRESSION: also scored Factuality 0 ("D") in the baseline — the agent
+  // paraphrased both definitions from memory and filed them under
+  // "Reliability" instead of the document's "Valid and Reliable". Same root
+  // cause as the "seven characteristics" case above.
   {
     input: "How does the AI RMF define both 'Accuracy' and 'Robustness', and which trustworthiness characteristic do they fall under?",
     expected:
       "Both fall under 'Valid and Reliable'. Accuracy is defined (via ISO/IEC TS 5723:2022) as the closeness of results of observations, computations, or estimates to the true or accepted-true values. Robustness (or generalizability) is defined as the ability of a system to maintain its level of performance under a variety of circumstances, including uses not initially anticipated.",
-    tags: ["multi-hop"]
+    tags: ["multi-hop", "regression"]
   },
   {
     input: "The AI RMF says it does not prescribe risk tolerance. Which section discusses this, and what does it say organizations should do instead?",
