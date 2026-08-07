@@ -9,7 +9,7 @@
     "lint": "next lint",
     "test": "node --import tsx --test src/lib/agent/brief-sections.test.ts src/lib/rag/index.test.ts evals/scorers.test.ts",
     "eval": "npx braintrust eval evals/agent.eval.ts",
-    "seed:knowledge": "node --import tsx scripts/seed-knowledge.ts"
+    "seed:knowledge": "node --env-file=.env.local --import tsx scripts/seed-knowledge.ts"
   },
   "dependencies": {
     "braintrust": "^3.27.0",
