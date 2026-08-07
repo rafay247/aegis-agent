@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import type { AgentStep, ChatResponse, ConversationSummary, ResearchSource } from "@/types";
+import type { AgentStep, BriefResponse, ChatResponse, ConversationSummary, ResearchSource } from "@/types";
+import { BriefPanel } from "@/app/components/BriefPanel";
 
 const conversationsStorageKey = "aegis-conversations";
 const maxPdfSources = 3;
@@ -275,6 +276,9 @@ export default function Home() {
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
+  const [briefMode, setBriefMode] = useState(false);
+  const [briefResult, setBriefResult] = useState<BriefResponse | null>(null);
+  const [isBriefLoading, setIsBriefLoading] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -354,7 +358,11 @@ export default function Home() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await submitPrompt(prompt);
+    if (briefMode) {
+      await submitBrief(prompt);
+    } else {
+      await submitPrompt(prompt);
+    }
   }
 
   async function submitPrompt(message: string) {
@@ -404,6 +412,43 @@ export default function Home() {
     } finally {
       setOptimisticMessages([]);
       setIsLoading(false);
+    }
+  }
+
+  async function submitBrief(topic: string) {
+    const trimmedTopic = topic.trim();
+    if (!sessionId || isBriefLoading || !trimmedTopic) {
+      return;
+    }
+
+    setIsBriefLoading(true);
+    setError("");
+    setPrompt("");
+
+    try {
+      const apiResponse = await fetch("/api/brief", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sessionId, topic: trimmedTopic })
+      });
+
+      if (!apiResponse.ok) {
+        const body = (await apiResponse.json()) as { error?: string };
+        throw new Error(body.error ?? "Aegis could not generate the brief.");
+      }
+
+      const data = (await apiResponse.json()) as BriefResponse;
+      setBriefResult(data);
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : "Something went wrong while generating the brief."
+      );
+    } finally {
+      setIsBriefLoading(false);
     }
   }
 
@@ -804,6 +849,18 @@ export default function Home() {
             <div ref={conversationEndRef} />
           </div>
 
+          {briefResult ? (
+            <div className="brief-panel-wrapper">
+              <BriefPanel brief={briefResult.brief} />
+            </div>
+          ) : null}
+
+          {isBriefLoading ? (
+            <div className="chat-empty-state">
+              <p>Generating brief…</p>
+            </div>
+          ) : null}
+
           {error ? <div className="error-banner">{error}</div> : null}
 
           <form onSubmit={handleSubmit} className="compact-composer">
@@ -812,7 +869,7 @@ export default function Home() {
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={1}
-              placeholder="Message Aegis"
+              placeholder={briefMode ? "Brief topic (e.g. \"summarize the risk framework\")" : "Message Aegis"}
             />
             <div className="composer-actions-row">
               <div className="composer-mode-pills">
@@ -825,6 +882,15 @@ export default function Home() {
                   <GlobeIcon />
                   <span>Smart Search</span>
                 </button>
+                <button
+                  type="button"
+                  className={`composer-mode-pill ${briefMode ? "active" : ""}`}
+                  aria-pressed={briefMode}
+                  onClick={() => setBriefMode((current) => !current)}
+                >
+                  <DocStepIcon />
+                  <span>Brief</span>
+                </button>
               </div>
               <div className="composer-actions">
                 <button
@@ -835,7 +901,7 @@ export default function Home() {
                 >
                   <AttachmentIcon />
                 </button>
-                <button type="submit" className="composer-send-button" disabled={isLoading || !prompt.trim()} aria-label="Send message">
+                <button type="submit" className="composer-send-button" disabled={isLoading || isBriefLoading || !prompt.trim()} aria-label="Send message">
                   <SendIcon />
                 </button>
               </div>
