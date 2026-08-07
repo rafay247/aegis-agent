@@ -43,8 +43,9 @@ the shape of a system that *looks* well-plumbed and is quietly wrong.
 
 ### Root cause
 
-Braintrust's per-case traces don't include the raw tool observations, so the
-investigation was done programmatically instead: a throwaway script looped over
+Neither the experiment summary nor the recorded spans carry the raw tool
+observations (see "Where Braintrust falls short" below), so the investigation
+was done programmatically instead: a throwaway script looped over
 all 18 dataset cases, called `runReactAgent` / `runBriefAgent` directly (exactly
 as `evals/agent.eval.ts` does), graded each result with the same `Factuality`
 scorer, and dumped the case input, the agent's answer, every search query, the
@@ -235,14 +236,20 @@ count.
 
 ## Where Braintrust falls short for this kind of eval
 
-- **The default trace doesn't capture what an agent actually saw.** The single
-  most important artifact in this investigation was the raw observation string
-  returned by `search_knowledge`. It is not in the experiment summary and wasn't
-  reachable without instrumenting spans by hand, so the entire root-cause
-  analysis was done with a throwaway local script that called the agent directly
-  and printed the tool observations. For single-turn Q&A the input/output pair is
-  the whole story; for an agent, the tool observations *are* the story, and they
-  need to be first-class, not opt-in.
+- **Nothing pushes you to trace what the agent actually saw.** The single most
+  important artifact in this investigation was the raw observation string
+  returned by `search_knowledge` — and it was in neither the experiment summary
+  nor the spans. This repo wraps every tool call in `traced()`
+  ([src/lib/observability](../src/lib/observability/index.ts)) and passes the
+  *query* as span metadata, but `traced()` does not capture a plain function's
+  return value as span output, so the observation was silently absent; recording
+  it requires an explicit `span.log({ output })` that nothing in the API shape
+  prompts you to write. The entire root-cause analysis therefore ran on a
+  throwaway local script that called the agent directly and printed the
+  observations. For single-turn Q&A the input/output pair is the whole story;
+  for an agent, the tool observations *are* the story, and the ergonomics should
+  make capturing them the default rather than an opt-in you only discover you
+  needed after a bad run.
 - **Scores are per-case aggregates, so a trajectory has no shape.** Braintrust
   gives one number per scorer per case. "Did the agent refine its search
   usefully?" is a property of a *sequence* of steps, and the only way to express
