@@ -21,7 +21,12 @@ export async function GET(_request: Request, context: RouteContext) {
   const messages = await loadConversationMessages(sessionId);
   const memoryRuns = await loadConversationRuns(sessionId);
   const runs = memoryRuns.length > 0 ? memoryRuns : await listResearchRuns(sessionId);
-  const latestRun = runs[0] ?? null;
+  // Brief runs (`POST /api/brief`) are stored on the same session's run list as
+  // chat runs, but they belong to the Brief panel, not the chat transcript.
+  // Reconstruct the chat response from the most recent *chat* run so a brief
+  // generated mid-conversation doesn't attach its citations/steps to the last
+  // chat message on reload.
+  const latestRun = runs.find((run) => !run.brief) ?? null;
 
   if (messages.length === 0 && !latestRun) {
     return NextResponse.json(

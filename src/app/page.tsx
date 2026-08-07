@@ -572,6 +572,7 @@ export default function Home() {
     setOptimisticMessages([]);
     setPrompt("");
     setError("");
+    setBriefResult(null);
   }
 
   async function openConversationById(nextSessionId: string, fallbackResponse: ChatResponse | null = null) {
@@ -581,6 +582,7 @@ export default function Home() {
     setOptimisticMessages([]);
     setPrompt("");
     setError("");
+    setBriefResult(null);
 
     try {
       const apiResponse = await fetch(`/api/conversations/${encodeURIComponent(nextSessionId)}`);
