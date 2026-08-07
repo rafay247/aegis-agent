@@ -70,7 +70,7 @@ npm install
 npm run dev      # http://localhost:3000
 ```
 
-Other commands: `npm run build`, `npm run start`, `npm run lint`.
+Other commands: `npm run build`, `npm run start`, `npm run lint`, `npm run typecheck:tools` (type-checks `evals/` and `scripts/`, which are excluded from the Next build so a production install without devDependencies still builds).
 
 ### Environment
 
@@ -83,6 +83,8 @@ All integrations are optional and read from `.env.local` (centralized in [src/li
 | `TAVILY_API_KEY` | `web_search` tool | — |
 | `REDIS_URL` | short-term memory | — |
 | `DATABASE_URL` | Postgres persistence | — |
+| `BRAINTRUST_API_KEY` | agent trace spans and the eval harness | — |
+| `BRAINTRUST_PROJECT` | Braintrust project name for traces | `aegis-agent-eval` |
 
 > Without a valid `OPENAI_API_KEY`, Aegis still responds — but via the deterministic fallback, not the autonomous ReAct loop.
 
@@ -115,11 +117,13 @@ npm run eval             # full Braintrust run (needs BRAINTRUST_API_KEY)
   NIST AI Risk Management Framework 1.0 PDF: 6 direct factual, 5 multi-hop,
   3 "not in the document" (should be declined, not hallucinated), and 4 brief
   requests. Cases pinned from a real past failure carry a `"regression"` tag.
-- **Scorers** ([evals/scorers.ts](evals/scorers.ts)) — `Factuality`
-  (LLM-graded, via `autoevals`) plus three programmatic scorers:
-  `CitationValidity` (every `[n]` resolves to a retrieved source),
+- **Scorers** ([evals/scorers.ts](evals/scorers.ts)) — two LLM-graded:
+  `Factuality` (via `autoevals`) and `NoHallucination` (on the "not in the
+  document" cases: did the agent decline, or fabricate?); plus three
+  programmatic: `CitationValidity` (every `[n]` resolves to a retrieved source),
   `Completeness` (all four brief sections present), and `SearchTrajectory`
-  (multi-hop cases should show real search refinement).
+  (multi-hop cases should show real search refinement — see the findings write-up
+  for why this one is a weak signal).
 - **Suite** ([evals/agent.eval.ts](evals/agent.eval.ts)) — two Braintrust
   experiments, one per workflow, calling `runReactAgent` / `runBriefAgent`
   directly.

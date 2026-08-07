@@ -9,9 +9,13 @@ npm run dev      # Next.js dev server on http://localhost:3000
 npm run build    # Production build
 npm run start    # Serve the production build
 npm run lint     # ESLint (next/core-web-vitals)
+npm test         # node:test unit tests (agent parsing, brief sections, RAG chunking, eval scorers)
+npm run typecheck:tools  # type-check evals/ + scripts/ (excluded from the Next build — see below)
+npm run eval     # Braintrust evaluation suite (evals/agent.eval.ts) — real API calls, needs BRAINTRUST_API_KEY
+npm run seed:knowledge  # ingest the demo NIST AI RMF PDF into the knowledge base
 ```
 
-There is no test suite. Verify changes by running `npm run dev` and exercising the API routes (e.g. `curl localhost:3000/api/health`) or the UI.
+`npm test` covers pure logic only — anything touching a network service or the DB is not tested. Verify those by running `npm run dev` and exercising the API routes (e.g. `curl localhost:3000/api/health`) or the UI.
 
 ## Environment
 
@@ -23,6 +27,7 @@ All external integrations are configured via `.env.local` (loaded automatically 
 | `TAVILY_API_KEY` | web search tool | — |
 | `REDIS_URL` | short-term memory | — |
 | `DATABASE_URL` | Postgres persistence | — |
+| `BRAINTRUST_API_KEY`, `BRAINTRUST_PROJECT` | agent trace spans + the eval harness | project defaults to `aegis-agent-eval` |
 | `PINECONE_API_KEY`, `PINECONE_INDEX` | declared but **not yet wired** | — |
 
 Import path alias: `@/*` → `./src/*`.
@@ -55,7 +60,8 @@ Pools and clients are cached on `globalThis` (`__aegis*__`) to avoid exhausting 
 
 - `POST /api/chat` — main agent turn (requires `sessionId` + `message`).
 - `GET /api/conversations` — list conversation summaries.
-- `GET|DELETE /api/conversations/[sessionId]` — load full history (reconstructs a `ChatResponse` from the latest run) / delete from all stores.
+- `POST /api/brief` — structured brief run ([runBrief](src/lib/agent/brief.ts)); same ReAct loop with a four-section output contract (Overview / Key Findings / Gaps & Limitations / Conclusion).
+- `GET|DELETE /api/conversations/[sessionId]` — load full history (reconstructs a `ChatResponse` from the latest **non-brief** run — brief runs share the session's run list but belong to the Brief panel) / delete from all stores.
 - `GET|POST /api/sources` — list / add a text knowledge document.
 - `POST /api/sources/pdf` — upload up to 3 PDFs; text extracted with `pdfjs-dist` legacy build (max via `maxPdfSources`).
 - `GET /api/health` — liveness.
@@ -65,5 +71,6 @@ Pools and clients are cached on `globalThis` (`__aegis*__`) to avoid exhausting 
 - Shared types live in [src/types/index.ts](src/types/index.ts); import via `@/types`.
 - Failures in external services degrade silently to fallbacks rather than throwing to the user — preserve this pattern when editing the lib layer.
 - `agentBlueprint.phase`/`/api/health` report `phase-2`; `usedModel` on a run distinguishes `openai-response-api` vs `local-phase-2-synthesizer`.
-- Observability ([src/lib/observability/](src/lib/observability/index.ts)) is a config stub only (`enabled: false`).
+- Observability ([src/lib/observability/](src/lib/observability/index.ts)) wraps every model/tool call in a real Braintrust `traced()` span via `tracedSpan()`, logging the call's result as span output. `initLogger` runs at most once per process. With no `BRAINTRUST_API_KEY` — or on any SDK failure — it degrades to plainly calling the wrapped function, same as every other integration.
+- `tsconfig.json` **excludes `evals/` and `scripts/`**: they import devDependencies (`openai`, `autoevals`, `tsx`), and `next build` type-checks everything the root `include` matches, so a production install (`npm ci --omit=dev`) would otherwise fail the build. Type-check them with `npm run typecheck:tools` ([tsconfig.tools.json](tsconfig.tools.json)) — plain `tsc --noEmit` no longer covers them.
 - README's recommended stack (LangChain, Pinecone, Firecrawl, Exa, Prisma) is aspirational; the actual implementation is plain `fetch` + `pg` + `redis` + in-memory RAG.

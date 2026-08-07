@@ -22,6 +22,16 @@ PDF ingested via the app's own PDF pipeline).
 - **CitationValidity** (programmatic) — every `[n]` citation must resolve to an actually-retrieved source
 - **Completeness** (programmatic, brief cases only) — all four required sections present with content
 - **SearchTrajectory** (heuristic) — multi-hop cases should show ≥2 distinct, non-duplicate search queries
+- **NoHallucination** (LLM-graded, `not-in-doc` cases only) — did the agent decline
+  or hedge, or did it fabricate a specific fact the document never states? Returns
+  a `null` score on every other case, so it is excluded from — not averaged into —
+  those cases' results. This is the one dimension the other four structurally
+  cannot see: `CitationValidity` stayed at 100% throughout the hallucination bug
+  because the citations were real even when the sentences around them were
+  invented, and `Factuality`'s rubric actively *penalizes* an honest refusal
+  (0.4 "subset", below a confident superset at 0.6). Before this scorer existed,
+  reading the hallucination signal meant hand-inspecting autoevals' internal
+  choice distribution (the `D` counts below).
 
 ## Before / after: the retriever returned the right chunks, but the agent never saw them
 
@@ -31,10 +41,10 @@ and
 [`aegis-agent-eval-briefs` / worktree-document-brief-eval-1786098054](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786098054),
 `errors: 0` in both):
 
-| Experiment | CitationValidity | Completeness | Factuality | SearchTrajectory |
-|---|---|---|---|---|
-| `aegis-agent-eval` (14 chat cases) | 100.00% | — | **37.14%** | 92.86% |
-| `aegis-agent-eval-briefs` (4 brief cases) | 100.00% | 100.00% | **55.00%** | 100.00% |
+| Experiment | CitationValidity | Completeness | Factuality | SearchTrajectory | NoHallucination |
+|---|---|---|---|---|---|
+| `aegis-agent-eval` (14 chat cases) | 100.00% | — | **37.14%** | 92.86% | not yet built |
+| `aegis-agent-eval-briefs` (4 brief cases) | 100.00% | 100.00% | **55.00%** | 100.00% | n/a |
 
 Every scorer except Factuality was at or near ceiling. Citations always
 resolved, briefs always had all four sections, and the trajectory heuristic
@@ -111,6 +121,11 @@ Two contributing factors surfaced from the same dump:
    With `retrieveKnowledge`'s default `limit = 3`, a top-3 search therefore
    returned roughly 1.5 *distinct* chunks. The app allows re-uploading the same
    file, so this is a realistic production condition, not just a dirty fixture.
+   It was absorbed (via the retrieval-limit increase below) rather than cleaned
+   up, which means **every "after" number in this document was measured against
+   that duplicated-ingestion condition** — a fresh reproduction from a single
+   `npm run seed:knowledge` ingestion has more distinct chunks per top-6 search
+   and may therefore land on somewhat different numbers.
 
 ### Fix
 
@@ -161,15 +176,43 @@ and
 [`aegis-agent-eval-briefs` / worktree-document-brief-eval-1786099973](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786099973),
 `errors: 0` in both):
 
-| Experiment | CitationValidity | Completeness | Factuality | SearchTrajectory |
-|---|---|---|---|---|
-| `aegis-agent-eval` (14 chat cases) | 100.00% (=) | — | **58.57%** (+21.43) | 64.29% (−28.57) |
-| `aegis-agent-eval-briefs` (4 brief cases) | 100.00% (=) | 100.00% (=) | 55.00% (=) | 100.00% (=) |
+| Experiment | CitationValidity | Completeness | Factuality | SearchTrajectory | NoHallucination |
+|---|---|---|---|---|---|
+| `aegis-agent-eval` (14 chat cases) | 100.00% (=) | — | **58.57%** (+21.43) | 64.29% (−28.57) | not yet built |
+| `aegis-agent-eval-briefs` (4 brief cases) | 100.00% (=) | 100.00% (=) | 55.00% (=) | 100.00% (=) | n/a |
 
 The immediately preceding run
 ([worktree-document-brief-eval-1786099906](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval/experiments/worktree-document-brief-eval-1786099906))
 produced the same chat numbers (Factuality 58.57%, SearchTrajectory 64.29%), so
 the chat result is stable across runs rather than a lucky sample.
+
+### Confirming it with a scorer instead of by hand
+
+The `D` counts above were read out of a local harness, not the dashboard. The
+`NoHallucination` scorer was added afterwards to make that signal a first-class
+number, and the suite was re-run against the same fixed build (experiments
+[`aegis-agent-eval` / worktree-document-brief-eval-1786107194](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval/experiments/worktree-document-brief-eval-1786107194)
+and
+[`aegis-agent-eval-briefs` / worktree-document-brief-eval-1786107194](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786107194),
+`errors: 0` in both):
+
+| Experiment | CitationValidity | Completeness | Factuality | SearchTrajectory | NoHallucination |
+|---|---|---|---|---|---|
+| `aegis-agent-eval` (14 chat cases) | 100.00% (=) | — | 55.71% (−2.86) | 64.29% (=) | **100.00%** (new) |
+| `aegis-agent-eval-briefs` (4 brief cases) | 100.00% (=) | 100.00% (=) | 55.00% (=) | 100.00% (=) | n/a |
+
+`NoHallucination` **100.00%** is over the three `not-in-doc` cases only — all
+three now decline explicitly ("the AI RMF does not define…") rather than
+inventing a fine, a committee size, or a compliance deadline. The eleven other
+chat cases return a `null` score and are excluded from that average. Against
+the baseline build the same scorer is what would have flagged the three `D`
+cases automatically.
+
+The `Factuality` −2.86 (one case, one bucket) is run-to-run grader variance on a
+14-case suite, not a code change: this run and the 58.57% run scored the same
+build. It is exactly the small-N noise described under "Where Braintrust falls
+short" — one case moving one bucket is ~2.9 points here, and Braintrust colours
+it as a regression regardless.
 
 ### Regression cases
 
@@ -244,7 +287,9 @@ count.
   *query* as span metadata, but `traced()` does not capture a plain function's
   return value as span output, so the observation was silently absent; recording
   it requires an explicit `span.log({ output })` that nothing in the API shape
-  prompts you to write. The entire root-cause analysis therefore ran on a
+  prompts you to write. (That call has since been added, so traces now carry the
+  observation — but it took a bad run to discover the gap.) The entire
+  root-cause analysis therefore ran on a
   throwaway local script that called the agent directly and printed the
   observations. For single-turn Q&A the input/output pair is the whole story;
   for an agent, the tool observations *are* the story, and the ergonomics should
@@ -290,6 +335,27 @@ count.
   one. Nothing in the tooling flags a delta as within-noise, so distinguishing
   signal from sampling required re-running the suite and comparing two
   consecutive experiments by hand.
+
+## Exported traces
+
+The Braintrust experiment links above need an account on the `codestair` org to
+open. As a static fallback, one real trace is checked in:
+
+- **[docs/sample-trace.json](sample-trace.json)** — the full step trace and
+  citations from a real `runBriefAgent` call against the seeded NIST AI RMF 1.0
+  knowledge base (topic: *"how the AI RMF defines and organizes AI risk
+  management functions"*). Every field is as the agent produced it: two
+  `search_knowledge` tool steps with their queries, `resultCount`, real
+  `startedAt` / `durationMs`, and — the artifact that mattered most in the
+  investigation above — the verbatim `observation` string handed back to the
+  model, showing real retrieved chunk text rather than the document title page
+  the broken build returned.
+
+Live experiment dashboards (account required):
+
+- Baseline: [`aegis-agent-eval`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval/experiments/worktree-document-brief-eval-1786098054) · [`aegis-agent-eval-briefs`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786098054)
+- After fix: [`aegis-agent-eval`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval/experiments/worktree-document-brief-eval-1786099973) · [`aegis-agent-eval-briefs`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786099973)
+- With `NoHallucination`: [`aegis-agent-eval`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval/experiments/worktree-document-brief-eval-1786107194) · [`aegis-agent-eval-briefs`](https://www.braintrust.dev/app/codestair/p/aegis-agent-eval-briefs/experiments/worktree-document-brief-eval-1786107194)
 
 ## Running this yourself
 
