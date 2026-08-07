@@ -424,6 +424,7 @@ export default function Home() {
     setIsBriefLoading(true);
     setError("");
     setPrompt("");
+    setBriefResult(null);
 
     try {
       const apiResponse = await fetch("/api/brief", {

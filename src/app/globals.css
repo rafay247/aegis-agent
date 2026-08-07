@@ -627,7 +627,7 @@ a.source-chip:hover {
   color: var(--text-strong);
 }
 
-.brief-export-button {
+.composer-icon-button.brief-export-button {
   font-size: 0.72rem;
   width: auto;
   padding: 0 12px;
