@@ -889,7 +889,10 @@ export default function Home() {
                   type="button"
                   className={`composer-mode-pill ${briefMode ? "active" : ""}`}
                   aria-pressed={briefMode}
-                  onClick={() => setBriefMode((current) => !current)}
+                  onClick={() => {
+                    setBriefMode((current) => !current);
+                    setBriefResult(null);
+                  }}
                 >
                   <DocStepIcon />
                   <span>Brief</span>
