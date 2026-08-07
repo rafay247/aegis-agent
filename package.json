@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "typecheck:tools": "tsc -p tsconfig.tools.json --noEmit",
     "test": "node --import tsx --test src/lib/agent/index.test.ts src/lib/agent/brief-sections.test.ts src/lib/rag/index.test.ts evals/scorers.test.ts",
     "eval": "npx braintrust eval evals/agent.eval.ts",
     "seed:knowledge": "node --env-file=.env.local --import tsx scripts/seed-knowledge.ts"

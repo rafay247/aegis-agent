@@ -1,0 +1,12 @@
+// Type-checks the dev-only tooling (eval harness + scripts) that the root
+// tsconfig deliberately excludes so `next build` stays runnable on a
+// production install. Run with `npm run typecheck:tools`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["evals/**/*.ts", "scripts/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

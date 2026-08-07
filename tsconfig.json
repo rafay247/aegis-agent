@@ -23,5 +23,10 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  // `evals/` and `scripts/` import devDependencies (openai, autoevals, tsx).
+  // `next build` type-checks everything this `include` matches, so leaving them
+  // in would make a production install (`npm ci --omit=dev`) fail the build on
+  // unresolvable modules that the app itself never imports. They are still
+  // type-checked — via `tsconfig.tools.json` / `npm run typecheck:tools`.
+  "exclude": ["node_modules", "evals", "scripts"]
 }
