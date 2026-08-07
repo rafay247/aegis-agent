@@ -5,7 +5,7 @@ import { runReactAgent } from "../src/lib/agent";
 import { runBriefAgent } from "../src/lib/agent/brief";
 import { listKnowledgeSources } from "../src/lib/rag";
 import { chatCases, briefCases } from "./dataset";
-import { scoreCitationValidity, scoreCompleteness, scoreSearchTrajectory } from "./scorers";
+import { scoreCitationValidity, scoreCompleteness, scoreNoHallucination, scoreSearchTrajectory } from "./scorers";
 
 // Verified against the installed braintrust@3.27.0 SDK
 // (node_modules/braintrust/dist/index.d.ts): `Eval<Input, Output, Expected,
@@ -49,7 +49,16 @@ Eval<string, Awaited<ReturnType<typeof runReactAgent>>, string, CaseMetadata>("a
         client: openaiClient
       }),
     (args) => scoreCitationValidity({ text: args.output.text, citations: args.output.citations }),
-    (args) => scoreSearchTrajectory(args.output.steps, args.metadata?.tags ?? [])
+    (args) => scoreSearchTrajectory(args.output.steps, args.metadata?.tags ?? []),
+    (args) =>
+      scoreNoHallucination({
+        input: args.input,
+        output: args.output.text,
+        expected: args.expected ?? "",
+        tags: args.metadata?.tags ?? [],
+        client: openaiClient,
+        model: factualityModel
+      })
   ]
 });
 

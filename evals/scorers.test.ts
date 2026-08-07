@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scoreCitationValidity, scoreCompleteness, scoreSearchTrajectory } from "./scorers";
+import type OpenAI from "openai";
+import { scoreCitationValidity, scoreCompleteness, scoreNoHallucination, scoreSearchTrajectory } from "./scorers";
 
 test("scoreCitationValidity gives full score when every citation resolves", () => {
   const result = scoreCitationValidity({
@@ -67,4 +68,30 @@ test("scoreSearchTrajectory doesn't penalize a single search on a direct-fact ca
     { id: "1", kind: "tool" as const, tool: "search_knowledge" as const, input: "GOVERN 1.1", summary: "" }
   ];
   assert.equal(scoreSearchTrajectory(steps, ["direct"]).score, 1);
+});
+
+// The grading path itself needs a live model, so the unit test covers only the
+// tag scoping: a non-"not-in-doc" case must short-circuit to a null score
+// *without* calling the LLM (a stub client that would throw if touched).
+test("scoreNoHallucination returns a null score and makes no model call off-tag", async () => {
+  const throwingClient = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("scoreNoHallucination should not call the model for a non not-in-doc case");
+      }
+    }
+  ) as OpenAI;
+
+  const result = await scoreNoHallucination({
+    input: "What are the four functions of the AI RMF Core?",
+    output: "GOVERN, MAP, MEASURE, MANAGE.",
+    expected: "GOVERN, MAP, MEASURE, and MANAGE.",
+    tags: ["direct"],
+    client: throwingClient,
+    model: "gpt-4.1-mini"
+  });
+
+  assert.equal(result.name, "NoHallucination");
+  assert.equal(result.score, null);
 });
