@@ -7,7 +7,12 @@ const nextConfig: NextConfig = {
   // that dynamic import into an internal module reference that doesn't
   // exist at runtime, breaking PDF text extraction. Excluding it here lets
   // Node's native module resolution handle it unbundled.
-  serverExternalPackages: ["pdfjs-dist"]
+  serverExternalPackages: ["pdfjs-dist"],
+  // That same dynamic worker import is invisible to output file tracing, so
+  // serverless deploys (Vercel) would ship pdf.mjs without its worker.
+  outputFileTracingIncludes: {
+    "/api/sources/pdf": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"]
+  }
 };
 
 export default nextConfig;
