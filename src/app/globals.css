@@ -1387,6 +1387,11 @@ textarea.documents-input {
   transition: opacity 140ms ease, transform 140ms ease;
 }
 
+.cite-card.below {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
 .cite:hover .cite-card,
 .cite:focus-within .cite-card {
   opacity: 1;

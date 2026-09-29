@@ -245,6 +245,7 @@ function excerpt(text: string, maxLength = 240) {
 function Citation({ index, source }: { index: number; source?: ResearchSource }) {
   const cardRef = useRef<HTMLSpanElement | null>(null);
   const [shift, setShift] = useState(0);
+  const [below, setBelow] = useState(false);
 
   if (!source) {
     return <>{`[${index}]`}</>;
@@ -253,7 +254,8 @@ function Citation({ index, source }: { index: number; source?: ResearchSource })
   const isDocument = source.kind === "knowledge";
   const isLink = !isDocument && source.url.startsWith("http");
 
-  // Keep the card inside the viewport when the reference sits near an edge.
+  // Keep the card fully visible: shift it sideways near the edges, and open it
+  // below the reference when there isn't room above inside the chat area.
   function position() {
     const card = cardRef.current;
     if (!card) {
@@ -263,6 +265,11 @@ function Citation({ index, source }: { index: number; source?: ResearchSource })
     card.style.setProperty("--cite-shift", "0px");
     const rect = card.getBoundingClientRect();
     const margin = 12;
+    const anchor = card.parentElement?.getBoundingClientRect();
+    const scrollArea = card.closest(".conversation-scroll")?.getBoundingClientRect();
+    const spaceAbove = (anchor?.top ?? rect.top) - (scrollArea?.top ?? 0);
+    setBelow(spaceAbove < rect.height + margin + 8);
+
     let next = 0;
     if (rect.right > window.innerWidth - margin) {
       next = window.innerWidth - margin - rect.right;
@@ -276,7 +283,7 @@ function Citation({ index, source }: { index: number; source?: ResearchSource })
   const card = (
     <span
       ref={cardRef}
-      className="cite-card"
+      className={`cite-card ${below ? "below" : ""}`}
       role="tooltip"
       style={{ "--cite-shift": `${shift}px` } as React.CSSProperties}
     >

@@ -259,6 +259,14 @@ export function createSourceRegistry() {
   return { sources, registerSources };
 }
 
+// Repeating the citation rule next to the evidence makes the model far more
+// consistent about inline [n] markers than the system prompt alone.
+function withCitationReminder(observation: string, resultCount: number) {
+  return resultCount > 0
+    ? `${observation}\n\nWhen you use these sources, cite them inline as [n] right after the claims they support.`
+    : observation;
+}
+
 // The ReAct loop: the model reasons, optionally calls tools, observes the
 // results, and repeats until it decides to answer (or hits the iteration cap).
 export type AgentRunOptions = {
@@ -360,7 +368,7 @@ export async function runReactAgent(
           startedAt: startedAt.toISOString(),
           durationMs: Date.now() - startedAt.getTime()
         });
-        messages.push({ role: "tool", tool_call_id: call.id, content: observation });
+        messages.push({ role: "tool", tool_call_id: call.id, content: withCitationReminder(observation, found.length) });
         onEvent?.({ type: "tool_end", step: steps[steps.length - 1] });
         onEvent?.({ type: "sources", sources: [...sources] });
       } else if (call.function.name === "search_knowledge") {
@@ -378,7 +386,7 @@ export async function runReactAgent(
           startedAt: startedAt.toISOString(),
           durationMs: Date.now() - startedAt.getTime()
         });
-        messages.push({ role: "tool", tool_call_id: call.id, content: observation });
+        messages.push({ role: "tool", tool_call_id: call.id, content: withCitationReminder(observation, found.length) });
         onEvent?.({ type: "tool_end", step: steps[steps.length - 1] });
         onEvent?.({ type: "sources", sources: [...sources] });
       } else {
