@@ -23,12 +23,25 @@ export async function POST(request: Request) {
   const addedSources = [];
 
   for (const file of files) {
-    const text = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+    let text = "";
+    try {
+      text = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+    } catch {
+      // Earlier files in the batch may already be saved, so send the fresh list.
+      return NextResponse.json(
+        {
+          error: `${file.name} couldn't be read. It may be damaged or password-protected.`,
+          sources: await listKnowledgeSources()
+        },
+        { status: 422 }
+      );
+    }
 
     if (!text) {
       return NextResponse.json(
         {
-          error: `${file.name} did not contain extractable text.`
+          error: `${file.name} has no selectable text (it may be a scanned image).`,
+          sources: await listKnowledgeSources()
         },
         { status: 400 }
       );

@@ -8,10 +8,19 @@ const nextConfig: NextConfig = {
   // exist at runtime, breaking PDF text extraction. Excluding it here lets
   // Node's native module resolution handle it unbundled.
   serverExternalPackages: ["pdfjs-dist"],
-  // That same dynamic worker import is invisible to output file tracing, so
-  // serverless deploys (Vercel) would ship pdf.mjs without its worker.
+  // Output file tracing can't see two runtime loads, so serverless deploys
+  // (Vercel) would ship pdf.mjs without them:
+  // - the dynamic import of its worker module;
+  // - @napi-rs/canvas, loaded via createRequire. pdf.mjs calls
+  //   `new DOMMatrix()` at import time and polyfills DOMMatrix from it on
+  //   Node, so without it the route fails with "DOMMatrix is not defined".
+  //   The linux-x64-gnu binary is the one Vercel's runtime loads.
   outputFileTracingIncludes: {
-    "/api/sources/pdf": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"]
+    "/api/sources/pdf": [
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "./node_modules/@napi-rs/canvas/**/*",
+      "./node_modules/@napi-rs/canvas-linux-x64-gnu/**/*"
+    ]
   }
 };
 

@@ -1,12 +1,12 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
+import { DocumentsModal } from "@/app/components/DocumentsModal";
 import { groupConversationsByDate, runsByAssistantMessage } from "@/lib/history";
 
 const conversationsStorageKey = "aegis-conversations";
 const modeStorageKey = "aegis-search-mode";
-const maxPdfSources = 3;
 
 type SearchMode = "docs" | "web";
 
@@ -345,16 +345,12 @@ export default function Home() {
   const [response, setResponse] = useState<ChatResponse | null>(null);
   const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<ResearchSource[]>([]);
-  const [sourceTitle, setSourceTitle] = useState("");
-  const [sourceText, setSourceText] = useState("");
-  const [sourcePdfFiles, setSourcePdfFiles] = useState<File[]>([]);
-  const [sourceStatus, setSourceStatus] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [optimisticMessages, setOptimisticMessages] = useState<ChatResponse["messages"]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSavingSource, setIsSavingSource] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
+  const closeDocuments = useCallback(() => setIsSourceModalOpen(false), []);
   const [mode, setMode] = useState<SearchMode>("web");
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -552,107 +548,6 @@ export default function Home() {
   }
 
 
-  function handlePdfSelection(files: FileList | null) {
-    if (!files) {
-      setSourcePdfFiles([]);
-      return;
-    }
-
-    const pdfFiles = Array.from(files).filter((file) => file.type === "application/pdf");
-    const selectedFiles = pdfFiles.slice(0, maxPdfSources);
-
-    setSourcePdfFiles(selectedFiles);
-
-    if (pdfFiles.length > maxPdfSources) {
-      setSourceStatus(`Only the first ${maxPdfSources} PDFs were selected.`);
-      return;
-    }
-
-    if (selectedFiles.length > 0) {
-      setSourceStatus(`${selectedFiles.length} PDF${selectedFiles.length === 1 ? "" : "s"} ready to add.`);
-    }
-  }
-
-  async function handleSourceSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!sourceText.trim() && sourcePdfFiles.length === 0) {
-      setSourceStatus("Paste document text or select up to 3 PDFs first.");
-      return;
-    }
-
-    setIsSavingSource(true);
-    setSourceStatus("");
-
-    try {
-      if (sourcePdfFiles.length > 0) {
-        const pdfFormData = new FormData();
-        sourcePdfFiles.forEach((file) => {
-          pdfFormData.append("files", file);
-        });
-
-        const apiResponse = await fetch("/api/sources/pdf", {
-          method: "POST",
-          body: pdfFormData
-        });
-
-        if (!apiResponse.ok) {
-          const body = (await apiResponse.json()) as { error?: string };
-          throw new Error(body.error ?? "PDF sources could not be saved.");
-        }
-
-        const data = (await apiResponse.json()) as { sources: ResearchSource[] };
-        setKnowledgeSources(data.sources);
-        setSourcePdfFiles([]);
-        setSourceStatus(`${sourcePdfFiles.length} PDF${sourcePdfFiles.length === 1 ? "" : "s"} added to your documents.`);
-      } else {
-        const apiResponse = await fetch("/api/sources", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            title: sourceTitle,
-            text: sourceText
-          })
-        });
-
-        if (!apiResponse.ok) {
-          const body = (await apiResponse.json()) as { error?: string };
-          throw new Error(body.error ?? "Source could not be saved.");
-        }
-
-        const data = (await apiResponse.json()) as { sources: ResearchSource[] };
-        setKnowledgeSources(data.sources);
-        setSourceTitle("");
-        setSourceText("");
-        setSourceStatus("Document added.");
-      }
-    } catch (sourceError) {
-      setSourceStatus(sourceError instanceof Error ? sourceError.message : "Source could not be saved.");
-    } finally {
-      setIsSavingSource(false);
-    }
-  }
-
-  async function removeKnowledgeSource(source: ResearchSource) {
-    if (!window.confirm(`Remove "${source.title}" from your documents? This can't be undone.`)) {
-      return;
-    }
-
-    try {
-      const apiResponse = await fetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
-      const body = (await apiResponse.json().catch(() => ({}))) as { sources?: ResearchSource[]; error?: string };
-      if (!apiResponse.ok) {
-        throw new Error(body.error ?? "The document could not be removed.");
-      }
-
-      setKnowledgeSources(body.sources ?? knowledgeSources.filter((current) => current.id !== source.id));
-      setSourceStatus(`Removed "${source.title}".`);
-    } catch (removeError) {
-      setSourceStatus(removeError instanceof Error ? removeError.message : "The document could not be removed.");
-    }
-  }
-
   function saveConversation(data: ChatResponse, submittedPrompt: string) {
     const firstUserMessage =
       data.messages.find((message) => message.role === "user")?.content || submittedPrompt;
@@ -790,91 +685,7 @@ export default function Home() {
       </aside>
 
       {isSourceModalOpen ? (
-        <div className="source-modal-backdrop" role="presentation">
-          <section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-modal-title">
-            <div className="source-modal-header">
-              <div>
-                <h2 id="source-modal-title">My documents</h2>
-                <p>
-                  {knowledgeSources.length} document{knowledgeSources.length === 1 ? "" : "s"} · used when you ask in
-                  &ldquo;My documents&rdquo; mode, never mixed with web results
-                </p>
-              </div>
-              <button type="button" className="source-modal-close" onClick={() => setIsSourceModalOpen(false)}>
-                Close
-              </button>
-            </div>
-
-            <div className="source-modal-grid">
-              <section className="source-modal-section">
-                <h3>Your library</h3>
-                <div className="rag-source-list modal-list" aria-label="Your documents">
-                  {knowledgeSources.length > 0 ? (
-                    knowledgeSources.map((source) => (
-                      <article key={source.id} className="rag-source-item" title={source.title}>
-                        <div className="rag-source-item-header">
-                          <h3>{source.title}</h3>
-                          <button
-                            type="button"
-                            className="rag-source-remove"
-                            aria-label={`Remove ${source.title}`}
-                            onClick={() => void removeKnowledgeSource(source)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        <p>{source.snippet}</p>
-                      </article>
-                    ))
-                  ) : (
-                    <p className="rag-source-empty">No documents yet. Paste text or upload a PDF to get started.</p>
-                  )}
-                </div>
-              </section>
-
-              <form className="source-ingest-form modal-form" onSubmit={handleSourceSubmit}>
-                <h3>Add a document</h3>
-                <input
-                  value={sourceTitle}
-                  onChange={(event) => setSourceTitle(event.target.value)}
-                  placeholder="Source title"
-                  aria-label="Source title"
-                />
-                <textarea
-                  value={sourceText}
-                  onChange={(event) => setSourceText(event.target.value)}
-                  placeholder="Paste document text…"
-                  aria-label="Document text"
-                  rows={10}
-                />
-                <label className="pdf-source-picker">
-                  <span>Or upload PDFs</span>
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    multiple
-                    onChange={(event) => handlePdfSelection(event.target.files)}
-                    aria-label={`Upload up to ${maxPdfSources} PDF sources`}
-                  />
-                  <small>Up to {maxPdfSources} PDFs at a time, under 4 MB total.</small>
-                </label>
-                {sourcePdfFiles.length > 0 ? (
-                  <div className="pdf-source-list" aria-label="Selected PDF sources">
-                    {sourcePdfFiles.map((file) => (
-                      <span key={`${file.name}-${file.size}`}>{file.name}</span>
-                    ))}
-                  </div>
-                ) : null}
-                <button type="submit" disabled={isSavingSource || (!sourceText.trim() && sourcePdfFiles.length === 0)}>
-                  {isSavingSource ? "Adding…" : "Add to my documents"}
-                </button>
-                <p className="source-ingest-status">
-                  {sourceStatus || "Documents are split into passages and searched when you ask in My documents mode."}
-                </p>
-              </form>
-            </div>
-          </section>
-        </div>
+        <DocumentsModal sources={knowledgeSources} onSourcesChange={setKnowledgeSources} onClose={closeDocuments} />
       ) : null}
 
       <div className="aegis-workspace">
