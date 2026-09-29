@@ -1,11 +1,15 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import type { AgentStep, BriefResponse, ChatResponse, ConversationSummary, ResearchSource } from "@/types";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { BriefResponse, ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
 import { BriefPanel } from "@/app/components/BriefPanel";
+import { groupConversationsByDate, runsByAssistantMessage } from "@/lib/history";
 
 const conversationsStorageKey = "aegis-conversations";
+const modeStorageKey = "aegis-search-mode";
 const maxPdfSources = 3;
+
+type SearchMode = "docs" | "web";
 
 type SavedConversation = ConversationSummary & {
   response?: ChatResponse;
@@ -108,39 +112,115 @@ function CheckStepIcon() {
   );
 }
 
-function AgentSteps({ steps }: { steps: AgentStep[] }) {
-  if (steps.length === 0) {
-    return null;
+function runMode(run: ResearchRun): SearchMode | null {
+  if (run.plan.mode) {
+    return run.plan.mode;
   }
 
-  const toolSteps = steps.filter((step) => step.kind === "tool");
-  if (toolSteps.length === 0) {
+  const tools = (run.steps ?? []).map((step) => step.tool);
+  if (tools.includes("web_search") || run.plan.useSearch) {
+    return "web";
+  }
+
+  if (tools.includes("search_knowledge") || run.plan.useRag) {
+    return "docs";
+  }
+
+  return null;
+}
+
+// Shows where an answer came from and, collapsed, the searches behind it.
+function AnswerMeta({ run }: { run: ResearchRun }) {
+  const mode = runMode(run);
+  const toolSteps = (run.steps ?? []).filter((step) => step.kind === "tool");
+  const resultTotal = toolSteps.reduce((total, step) => total + (step.resultCount ?? 0), 0);
+
+  return (
+    <details className="answer-meta">
+      <summary>
+        <span className={`answer-mode-badge ${mode ?? "none"}`}>
+          {mode === "web" ? <GlobeIcon /> : mode === "docs" ? <DocStepIcon /> : <CheckStepIcon />}
+          {mode === "web" ? "From the web" : mode === "docs" ? "From your documents" : "No search needed"}
+        </span>
+        <span className={`answer-meta-detail ${toolSteps.length > 0 ? "expandable" : ""}`}>
+          {toolSteps.length > 0
+            ? `${toolSteps.length} search${toolSteps.length === 1 ? "" : "es"} · ${resultTotal} result${resultTotal === 1 ? "" : "s"}`
+            : "answered without a new search"}
+        </span>
+      </summary>
+      {toolSteps.length > 0 ? (
+        <ul className="answer-meta-steps">
+          {toolSteps.map((step) => (
+            <li key={step.id}>
+              {step.tool === "search_knowledge" ? <DocStepIcon /> : <SearchStepIcon />}
+              <span className="agent-step-text">{step.summary}</span>
+              {typeof step.resultCount === "number" ? (
+                <span className="agent-step-count">
+                  {step.resultCount} result{step.resultCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </details>
+  );
+}
+
+function SourceChips({ sources }: { sources: ResearchSource[] }) {
+  if (sources.length === 0) {
     return null;
   }
 
   return (
-    <div className="agent-steps" aria-label="Agent steps">
-      <div className="agent-steps-title">
-        <CheckStepIcon />
-        <span>
-          Worked through {toolSteps.length} step{toolSteps.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <ul>
-        {toolSteps.map((step) => (
-          <li key={step.id}>
-            {step.tool === "search_knowledge" ? <DocStepIcon /> : <SearchStepIcon />}
-            <span className="agent-step-text">{step.summary}</span>
-            {typeof step.resultCount === "number" ? (
-              <span className="agent-step-count">
-                {step.resultCount} result{step.resultCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+    <div className="source-strip" aria-label="Sources">
+      {sources.slice(0, 8).map((source, index) => {
+        const isDocument = source.kind === "knowledge";
+        const content = (
+          <>
+            <span className="source-chip-index">{index + 1}</span>
+            {isDocument ? <DocStepIcon /> : <GlobeIcon />}
+            <span className="source-chip-label">{isDocument ? source.title : source.domain}</span>
+          </>
+        );
+
+        return !isDocument && source.url.startsWith("http") ? (
+          <a
+            key={source.id}
+            href={source.url}
+            target="_blank"
+            rel="noreferrer"
+            className="source-chip web"
+            title={source.title}
+          >
+            {content}
+          </a>
+        ) : (
+          <span key={source.id} className="source-chip document" title={source.title}>
+            {content}
+          </span>
+        );
+      })}
     </div>
   );
+}
+
+function formatRelativeTime(isoDate: string, now = Date.now()) {
+  const minutes = Math.round((now - new Date(isoDate).getTime()) / 60000);
+  if (minutes < 1) {
+    return "just now";
+  }
+
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  return new Date(isoDate).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function SunIcon() {
@@ -271,11 +351,12 @@ export default function Home() {
   const [sourcePdfFiles, setSourcePdfFiles] = useState<File[]>([]);
   const [sourceStatus, setSourceStatus] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [optimisticMessages, setOptimisticMessages] = useState<ChatResponse["messages"]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
-  const [useWebSearch, setUseWebSearch] = useState(false);
+  const [mode, setMode] = useState<SearchMode>("web");
   const [briefMode, setBriefMode] = useState(false);
   const [briefResult, setBriefResult] = useState<BriefResponse | null>(null);
   const [isBriefLoading, setIsBriefLoading] = useState(false);
@@ -288,6 +369,26 @@ export default function Home() {
       setTheme(stored);
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      const storedMode = window.localStorage.getItem(modeStorageKey);
+      if (storedMode === "docs" || storedMode === "web") {
+        setMode(storedMode);
+      }
+    } catch {
+      // Mode preference is a convenience; the default still works.
+    }
+  }, []);
+
+  function chooseMode(nextMode: SearchMode) {
+    setMode(nextMode);
+    try {
+      window.localStorage.setItem(modeStorageKey, nextMode);
+    } catch {
+      // Ignore storage failures (private windows, blocked storage).
+    }
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -353,8 +454,12 @@ export default function Home() {
 
   const messages = response?.messages ?? [];
   const visibleMessages = optimisticMessages.length > 0 ? optimisticMessages : messages;
-  const sources = response?.citations ?? [];
-  const latestSteps = response?.run?.steps ?? [];
+  const runByMessage = useMemo(
+    () => runsByAssistantMessage(response?.messages ?? [], response?.runs ?? (response?.run ? [response.run] : [])),
+    [response]
+  );
+  const conversationGroups = useMemo(() => groupConversationsByDate(savedConversations), [savedConversations]);
+  const needsDocuments = mode === "docs" && knowledgeSources.length === 0;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -373,6 +478,7 @@ export default function Home() {
 
     setIsLoading(true);
     setError("");
+    setNotice("");
     const optimisticUserMessage = {
       id: `optimistic-${Date.now()}`,
       role: "user" as const,
@@ -391,12 +497,12 @@ export default function Home() {
         body: JSON.stringify({
           sessionId,
           message: trimmedMessage,
-          useWebSearch
+          useWebSearch: mode === "web"
         })
       });
 
       if (!apiResponse.ok) {
-        const body = (await apiResponse.json()) as { error?: string };
+        const body = (await apiResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? "Aegis could not complete the request.");
       }
 
@@ -404,14 +510,45 @@ export default function Home() {
       setResponse(data);
       saveConversation(data, trimmedMessage);
     } catch (submissionError) {
-      setError(
-        submissionError instanceof Error
-          ? submissionError.message
-          : "Something went wrong while asking Aegis."
-      );
+      // A dropped connection (e.g. ERR_NETWORK_CHANGED) can still leave the
+      // answer saved on the server, so check before calling it a failure.
+      const recovered = await recoverAnsweredTurn(sessionId, trimmedMessage);
+      if (recovered) {
+        setNotice("The connection dropped, but Aegis finished and saved your answer — it's shown above.");
+      } else {
+        setPrompt(trimmedMessage);
+        setError(
+          submissionError instanceof TypeError
+            ? "Connection lost before Aegis could answer. Your question is back in the box — press Enter to retry."
+            : submissionError instanceof Error
+              ? submissionError.message
+              : "Something went wrong while asking Aegis."
+        );
+      }
     } finally {
       setOptimisticMessages([]);
       setIsLoading(false);
+    }
+  }
+
+  async function recoverAnsweredTurn(targetSessionId: string, question: string) {
+    try {
+      const apiResponse = await fetch(`/api/conversations/${encodeURIComponent(targetSessionId)}`);
+      if (!apiResponse.ok) {
+        return false;
+      }
+
+      const data = (await apiResponse.json()) as ChatResponse;
+      const lastUserMessage = data.messages.filter((message) => message.role === "user").at(-1);
+      if (lastUserMessage?.content !== question || data.messages.at(-1)?.role !== "assistant") {
+        return false;
+      }
+
+      setResponse(data);
+      saveConversation(data, question);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -423,6 +560,7 @@ export default function Home() {
 
     setIsBriefLoading(true);
     setError("");
+    setNotice("");
     setPrompt("");
     setBriefResult(null);
 
@@ -512,7 +650,7 @@ export default function Home() {
         const data = (await apiResponse.json()) as { sources: ResearchSource[] };
         setKnowledgeSources(data.sources);
         setSourcePdfFiles([]);
-        setSourceStatus(`${sourcePdfFiles.length} PDF${sourcePdfFiles.length === 1 ? "" : "s"} added to RAG.`);
+        setSourceStatus(`${sourcePdfFiles.length} PDF${sourcePdfFiles.length === 1 ? "" : "s"} added to your documents.`);
       } else {
         const apiResponse = await fetch("/api/sources", {
           method: "POST",
@@ -534,7 +672,7 @@ export default function Home() {
         setKnowledgeSources(data.sources);
         setSourceTitle("");
         setSourceText("");
-        setSourceStatus("Explicit content added to RAG.");
+        setSourceStatus("Document added.");
       }
     } catch (sourceError) {
       setSourceStatus(sourceError instanceof Error ? sourceError.message : "Source could not be saved.");
@@ -572,6 +710,7 @@ export default function Home() {
     setOptimisticMessages([]);
     setPrompt("");
     setError("");
+    setNotice("");
     setBriefResult(null);
   }
 
@@ -582,6 +721,7 @@ export default function Home() {
     setOptimisticMessages([]);
     setPrompt("");
     setError("");
+    setNotice("");
     setBriefResult(null);
 
     try {
@@ -635,30 +775,43 @@ export default function Home() {
           <span>New chat</span>
         </button>
 
-        <div className="history-section-title">History</div>
         <div className="conversation-history-list">
-          {savedConversations.length > 0 ? (
-            savedConversations.map((conversation) => (
-              <div
-                key={conversation.sessionId}
-                className={`conversation-history-row ${
-                  conversation.sessionId === sessionId ? "active" : ""
-                }`}
-                title={conversation.title}
-              >
-                <button type="button" className="conversation-history-item" onClick={() => openConversation(conversation)}>
-                  <HistoryIcon />
-                  <span>{conversation.title}</span>
-                </button>
-                <button
-                  type="button"
-                  className="conversation-delete-control"
-                  aria-label={`Delete ${conversation.title}`}
-                  onClick={() => void deleteConversation(conversation)}
-                >
-                  <DeleteIcon />
-                </button>
-              </div>
+          {conversationGroups.length > 0 ? (
+            conversationGroups.map((group) => (
+              <section key={group.label} className="history-group" aria-label={group.label}>
+                <div className="history-section-title">{group.label}</div>
+                {group.conversations.map((conversation) => (
+                  <div
+                    key={conversation.sessionId}
+                    className={`conversation-history-row ${
+                      conversation.sessionId === sessionId ? "active" : ""
+                    }`}
+                    title={conversation.title}
+                  >
+                    <button
+                      type="button"
+                      className="conversation-history-item"
+                      onClick={() => openConversation(conversation)}
+                      aria-current={conversation.sessionId === sessionId ? "page" : undefined}
+                    >
+                      <HistoryIcon />
+                      <span className="conversation-history-text">
+                        <span className="conversation-history-title">{conversation.title || "Untitled chat"}</span>
+                        <span className="conversation-history-time">{formatRelativeTime(conversation.updatedAt)}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="conversation-delete-control"
+                      aria-label={`Delete ${conversation.title}`}
+                      title="Delete chat"
+                      onClick={() => void deleteConversation(conversation)}
+                    >
+                      <DeleteIcon />
+                    </button>
+                  </div>
+                ))}
+              </section>
             ))
           ) : (
             <p className="history-empty-state">Your conversations will appear here after you send a message.</p>
@@ -671,8 +824,11 @@ export default function Home() {
           <section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-modal-title">
             <div className="source-modal-header">
               <div>
-                <h2 id="source-modal-title">RAG sources</h2>
-                <p>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"} available for retrieval</p>
+                <h2 id="source-modal-title">My documents</h2>
+                <p>
+                  {knowledgeSources.length} document{knowledgeSources.length === 1 ? "" : "s"} · used when you ask in
+                  &ldquo;My documents&rdquo; mode, never mixed with web results
+                </p>
               </div>
               <button type="button" className="source-modal-close" onClick={() => setIsSourceModalOpen(false)}>
                 Close
@@ -681,26 +837,25 @@ export default function Home() {
 
             <div className="source-modal-grid">
               <section className="source-modal-section">
-                <h3>Explicit content</h3>
-                <div className="rag-source-list modal-list" aria-label="Loaded RAG sources">
+                <h3>Your library</h3>
+                <div className="rag-source-list modal-list" aria-label="Your documents">
                   {knowledgeSources.length > 0 ? (
                     knowledgeSources.map((source) => (
                       <article key={source.id} className="rag-source-item" title={source.title}>
                         <div>
                           <h3>{source.title}</h3>
-                          <span>{source.domain}</span>
                         </div>
                         <p>{source.snippet}</p>
                       </article>
                     ))
                   ) : (
-                    <p className="rag-source-empty">No explicit RAG content loaded yet.</p>
+                    <p className="rag-source-empty">No documents yet. Paste text or upload a PDF to get started.</p>
                   )}
                 </div>
               </section>
 
               <form className="source-ingest-form modal-form" onSubmit={handleSourceSubmit}>
-                <h3>Add or update content</h3>
+                <h3>Add a document</h3>
                 <input
                   value={sourceTitle}
                   onChange={(event) => setSourceTitle(event.target.value)}
@@ -710,12 +865,12 @@ export default function Home() {
                 <textarea
                   value={sourceText}
                   onChange={(event) => setSourceText(event.target.value)}
-                  placeholder="Paste source text for RAG search..."
-                  aria-label="Explicit content for RAG search"
+                  placeholder="Paste document text…"
+                  aria-label="Document text"
                   rows={10}
                 />
                 <label className="pdf-source-picker">
-                  <span>PDF sources</span>
+                  <span>Or upload PDFs</span>
                   <input
                     type="file"
                     accept="application/pdf"
@@ -723,7 +878,7 @@ export default function Home() {
                     onChange={(event) => handlePdfSelection(event.target.files)}
                     aria-label={`Upload up to ${maxPdfSources} PDF sources`}
                   />
-                  <small>Upload up to {maxPdfSources} PDFs. Text will be extracted into RAG sources.</small>
+                  <small>Up to {maxPdfSources} PDFs at a time, under 4 MB total.</small>
                 </label>
                 {sourcePdfFiles.length > 0 ? (
                   <div className="pdf-source-list" aria-label="Selected PDF sources">
@@ -733,10 +888,10 @@ export default function Home() {
                   </div>
                 ) : null}
                 <button type="submit" disabled={isSavingSource || (!sourceText.trim() && sourcePdfFiles.length === 0)}>
-                  {isSavingSource ? "Adding..." : "Add to RAG"}
+                  {isSavingSource ? "Adding…" : "Add to my documents"}
                 </button>
                 <p className="source-ingest-status">
-                  {sourceStatus || "Paste text or attach PDFs to update RAG."}
+                  {sourceStatus || "Documents are split into passages and searched when you ask in My documents mode."}
                 </p>
               </form>
             </div>
@@ -766,32 +921,40 @@ export default function Home() {
               <div className="chat-empty-state">
                 <h3>Meet Aegis</h3>
                 <p>
-                  A research agent that finds fresh information, reads your own sources, remembers the
-                  conversation, and writes grounded answers with citations.
+                  A research agent that writes grounded answers with citations. Pick where it should look
+                  using the switch under the message box — it never mixes the two.
                 </p>
-                <div className="capability-grid" aria-label="What Aegis can do">
-                  <div className="capability-card">
-                    <h4>Live web research</h4>
-                    <p>Turn on Smart Search and Aegis searches the web, then synthesizes an answer with linked sources.</p>
-                  </div>
-                  <div className="capability-card">
-                    <h4>Your own sources</h4>
-                    <p>Attach text or PDFs and Aegis answers from your documents using retrieval (RAG).</p>
-                  </div>
-                  <div className="capability-card">
-                    <h4>Conversation memory</h4>
-                    <p>Aegis keeps recent context so you can ask natural follow-up questions.</p>
-                  </div>
-                  <div className="capability-card">
-                    <h4>Cited synthesis</h4>
-                    <p>Answers come back as clear prose with inline [1] citations — not a list of links.</p>
-                  </div>
+                <div className="capability-grid" aria-label="Where Aegis can look">
+                  <button
+                    type="button"
+                    className={`capability-card mode-card ${mode === "web" ? "active" : ""}`}
+                    onClick={() => chooseMode("web")}
+                  >
+                    <h4>
+                      <GlobeIcon /> Web
+                    </h4>
+                    <p>Searches the live internet for current information and links every source.</p>
+                  </button>
+                  <button
+                    type="button"
+                    className={`capability-card mode-card ${mode === "docs" ? "active" : ""}`}
+                    onClick={() => chooseMode("docs")}
+                  >
+                    <h4>
+                      <DocStepIcon /> My documents
+                    </h4>
+                    <p>
+                      Answers only from text and PDFs you add
+                      {knowledgeSources.length > 0
+                        ? ` (${knowledgeSources.length} added).`
+                        : " — add some with the paperclip."}
+                    </p>
+                  </button>
                 </div>
               </div>
             ) : (
-              visibleMessages.map((message, messageIndex) => {
-                const isLastAssistant =
-                  message.role === "assistant" && messageIndex === visibleMessages.length - 1;
+              visibleMessages.map((message) => {
+                const run = message.role === "assistant" ? runByMessage.get(message.id) : undefined;
 
                 return (
                   <article
@@ -799,34 +962,9 @@ export default function Home() {
                     className={`chat-message ${message.role === "assistant" ? "assistant-message" : "user-message"}`}
                   >
                     <div className="message-body">
-                      {isLastAssistant && optimisticMessages.length === 0 ? (
-                        <AgentSteps steps={latestSteps} />
-                      ) : null}
+                      {run ? <AnswerMeta run={run} /> : null}
                       <div className="message-content">{renderMessageContent(message.content)}</div>
-                      {isLastAssistant && sources.length > 0 ? (
-                        <div className="source-strip" aria-label="Sources">
-                          {sources.slice(0, 6).map((source, index) =>
-                            source.url.startsWith("http") ? (
-                              <a
-                                key={source.id}
-                                href={source.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="source-chip"
-                                title={source.title}
-                              >
-                                <span className="source-chip-index">{index + 1}</span>
-                                {source.domain}
-                              </a>
-                            ) : (
-                              <span key={source.id} className="source-chip" title={source.title}>
-                                <span className="source-chip-index">{index + 1}</span>
-                                {source.domain}
-                              </span>
-                            )
-                          )}
-                        </div>
-                      ) : null}
+                      {run ? <SourceChips sources={run.citations} /> : null}
                     </div>
                   </article>
                 );
@@ -843,7 +981,7 @@ export default function Home() {
                       <span />
                     </div>
                     <span className="agent-thinking-label">
-                      {useWebSearch ? "Researching the web…" : "Thinking…"}
+                      {mode === "web" ? "Searching the web…" : "Searching your documents…"}
                     </span>
                   </div>
                 </div>
@@ -859,12 +997,18 @@ export default function Home() {
           ) : null}
 
           {isBriefLoading ? (
-            <div className="chat-empty-state">
-              <p>Generating brief…</p>
+            <div className="agent-thinking brief-loading" aria-label="Generating brief">
+              <div className="typing-bar">
+                <span />
+                <span />
+                <span />
+              </div>
+              <span className="agent-thinking-label">Writing a brief from your documents…</span>
             </div>
           ) : null}
 
-          {error ? <div className="error-banner">{error}</div> : null}
+          {error ? <div className="error-banner" role="alert">{error}</div> : null}
+          {notice ? <div className="notice-banner" role="status">{notice}</div> : null}
 
           <form onSubmit={handleSubmit} className="compact-composer">
             <textarea
@@ -872,19 +1016,59 @@ export default function Home() {
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={1}
-              placeholder={briefMode ? "Brief topic (e.g. \"summarize the risk framework\")" : "Message Aegis"}
+              placeholder={
+                briefMode
+                  ? "Brief topic (e.g. \"summarize the risk framework\")"
+                  : mode === "web"
+                    ? "Ask anything — Aegis will search the web"
+                    : "Ask about your documents"
+              }
             />
+            {needsDocuments ? (
+              <p className="composer-hint">
+                You haven&rsquo;t added any documents yet.{" "}
+                <button type="button" onClick={() => setIsSourceModalOpen(true)}>
+                  Add documents
+                </button>{" "}
+                or{" "}
+                <button type="button" onClick={() => chooseMode("web")}>
+                  search the web
+                </button>
+                .
+              </p>
+            ) : null}
             <div className="composer-actions-row">
               <div className="composer-mode-pills">
-                <button
-                  type="button"
-                  className={`composer-mode-pill ${useWebSearch ? "active" : ""}`}
-                  aria-pressed={useWebSearch}
-                  onClick={() => setUseWebSearch((current) => !current)}
-                >
-                  <GlobeIcon />
-                  <span>Smart Search</span>
-                </button>
+                {briefMode ? (
+                  <span className="mode-switch-static" title="Briefs are always written from your documents">
+                    <DocStepIcon />
+                    My documents
+                  </span>
+                ) : (
+                  <div className="mode-switch" role="radiogroup" aria-label="Where to search">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === "web"}
+                      className={mode === "web" ? "active" : ""}
+                      onClick={() => chooseMode("web")}
+                    >
+                      <GlobeIcon />
+                      <span>Web</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === "docs"}
+                      className={mode === "docs" ? "active" : ""}
+                      onClick={() => chooseMode("docs")}
+                    >
+                      <DocStepIcon />
+                      <span>My documents</span>
+                      <span className="mode-switch-count">{knowledgeSources.length}</span>
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   className={`composer-mode-pill ${briefMode ? "active" : ""}`}
@@ -902,7 +1086,8 @@ export default function Home() {
                 <button
                   type="button"
                   className="composer-icon-button"
-                  aria-label="Attach sources"
+                  aria-label="Manage my documents"
+                  title="Add or view my documents"
                   onClick={() => setIsSourceModalOpen(true)}
                 >
                   <AttachmentIcon />

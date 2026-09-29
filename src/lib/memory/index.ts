@@ -1,4 +1,5 @@
-import { listSessionMessages } from "@/lib/db";
+import { listSessionMessages, listSessionSummaries } from "@/lib/db";
+import { mergeConversationSummaries } from "@/lib/history";
 import { getRedisClient } from "@/lib/memory/client";
 import { deleteSessionState, getSessionState, listSessionStates } from "@/lib/runtime-store";
 import type { ChatMessage, ConversationSummary, ResearchRun } from "@/types";
@@ -148,29 +149,24 @@ export async function loadConversationRuns(sessionId: string) {
   }
 }
 
+async function loadRedisSummaries() {
+  try {
+    const redis = await getRedisClient();
+    return redis ? (await redis.hVals(conversationSummariesKey())).map(parseConversationSummary) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Redis, Postgres, and this process can each be missing sessions the others
+// saved (a write can silently fall back), so the list is their union.
 export async function listConversationSummaries() {
   const fallbackSummaries = listSessionStates()
     .map((state) => state.summary)
     .filter(Boolean) as ConversationSummary[];
+  const [redisSummaries, postgresSummaries] = await Promise.all([loadRedisSummaries(), listSessionSummaries()]);
 
-  try {
-    const redis = await getRedisClient();
-
-    if (!redis) {
-      return fallbackSummaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    }
-
-    const entries = await redis.hVals(conversationSummariesKey());
-    const summaries = entries.map(parseConversationSummary);
-
-    if (summaries.length > 0) {
-      return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    }
-
-    return fallbackSummaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  } catch {
-    return fallbackSummaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  }
+  return mergeConversationSummaries(redisSummaries, postgresSummaries, fallbackSummaries);
 }
 
 export async function deleteConversationMemory(sessionId: string) {

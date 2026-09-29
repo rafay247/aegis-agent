@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSourceRegistry } from "./index";
+import { agentToolsFor, createSourceRegistry } from "./index";
 import type { ResearchSource } from "../../types";
 
 test("registerSources prefers content (the retrieved chunk) over snippet (the document-level preview)", () => {
@@ -52,4 +52,9 @@ test("registerSources reuses the same citation index when the same source url is
   assert.ok(firstObservation.startsWith("[1] "));
   assert.ok(secondObservation.startsWith("[1] "), "same url should reuse citation index [1]");
   assert.equal(sources.length, 1, "the registry should only track one unique source for the shared url");
+});
+
+test("web mode only offers web_search, docs mode only offers search_knowledge", () => {
+  assert.deepEqual(agentToolsFor(true).map((tool) => tool.function.name), ["web_search"]);
+  assert.deepEqual(agentToolsFor(false).map((tool) => tool.function.name), ["search_knowledge"]);
 });

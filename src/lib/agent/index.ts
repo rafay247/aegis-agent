@@ -1,10 +1,12 @@
-import { saveChatMessages, saveResearchRun } from "@/lib/db";
+import { listResearchRuns, saveChatMessages, saveResearchRun } from "@/lib/db";
+import { mergeRuns } from "@/lib/history";
 import { callChatModel, hasOpenAiConfig } from "@/lib/agent/openai";
 import type { ChatModelMessage, ChatTool } from "@/lib/agent/openai";
 import {
   appendMessages,
   appendResearchRunMemory,
   loadConversationMessages,
+  loadConversationRuns,
   loadRecentMessages,
   upsertConversationSummary
 } from "@/lib/memory";
@@ -72,6 +74,12 @@ export const KNOWLEDGE_TOOL: ChatTool = {
     }
   }
 };
+
+// Web mode and docs mode are exclusive: the agent never mixes the user's own
+// documents into a web answer, or web results into a documents answer.
+export function agentToolsFor(allowWeb: boolean): ChatTool[] {
+  return allowWeb ? [WEB_SEARCH_TOOL] : [KNOWLEDGE_TOOL];
+}
 
 export function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -260,15 +268,19 @@ export async function runReactAgent(
   const { sources, registerSources } = createSourceRegistry();
   const steps: AgentStep[] = [];
 
-  const tools: ChatTool[] = allowWeb ? [WEB_SEARCH_TOOL, KNOWLEDGE_TOOL] : [KNOWLEDGE_TOOL];
+  const tools = agentToolsFor(allowWeb);
 
   const knowledgeHint =
     knowledgeCount > 0
       ? ` The user has ${knowledgeCount} document(s) in their private knowledge base. If the question could relate to their own notes, products, or uploads — including vague references like "it" or "this" — call search_knowledge before answering.`
       : " The user has no documents in their knowledge base yet, so search_knowledge will return nothing.";
 
+  const modeHint = allowWeb
+    ? " The user chose Web mode: only web_search is available. Answer from web results only and do not refer to their uploaded documents."
+    : " The user chose My documents mode: only search_knowledge is available. Always call search_knowledge before saying what their documents do or do not contain. Answer only from their documents; if the documents do not cover the question, say so plainly and suggest switching to Web mode instead of answering from general knowledge.";
+
   const messages: ChatModelMessage[] = [
-    { role: "system", content: AGENT_SYSTEM_PROMPT + knowledgeHint },
+    { role: "system", content: AGENT_SYSTEM_PROMPT + modeHint + (allowWeb ? "" : knowledgeHint) },
     ...memory.map((message) => ({ role: message.role, content: message.content })),
     { role: "user", content: question }
   ];
@@ -377,11 +389,12 @@ async function runFallback(question: string, allowWeb: boolean): Promise<AgentRe
   return { text: answer.text, citations: answer.citations, steps };
 }
 
-function derivePlan(steps: AgentStep[], usedModel: string): AgentPlan {
+function derivePlan(steps: AgentStep[], usedModel: string, allowWeb: boolean): AgentPlan {
   const useSearch = steps.some((step) => step.tool === "web_search");
   const useRag = steps.some((step) => step.tool === "search_knowledge");
 
   return {
+    mode: allowWeb ? "web" : "docs",
     useSearch,
     useRag,
     reasoning:
@@ -420,7 +433,7 @@ export async function runAgent(request: ChatRequest): Promise<ChatResponse> {
     usedModel = "local-fallback";
   }
 
-  const plan = derivePlan(result.steps, usedModel);
+  const plan = derivePlan(result.steps, usedModel, allowWeb);
   const citations = result.citations.slice(0, 8);
 
   const userMessage = {
@@ -459,6 +472,9 @@ export async function runAgent(request: ChatRequest): Promise<ChatResponse> {
 
   await appendResearchRunMemory(run);
 
+  const [memoryRuns, databaseRuns] = await Promise.all([loadConversationRuns(sessionId), listResearchRuns(sessionId)]);
+  const runs = mergeRuns([run], memoryRuns, databaseRuns).filter((entry) => !entry.brief);
+
   await upsertConversationSummary({
     sessionId,
     title: firstUserMessage.slice(0, 64),
@@ -471,6 +487,7 @@ export async function runAgent(request: ChatRequest): Promise<ChatResponse> {
     plan,
     citations,
     messages: conversationMessages,
-    run
+    run,
+    runs
   };
 }

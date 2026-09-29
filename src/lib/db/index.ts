@@ -1,6 +1,6 @@
 import { ensurePostgresSchema, getPostgresPool } from "@/lib/db/client";
 import { getSessionState } from "@/lib/runtime-store";
-import type { ChatMessage, ResearchRun } from "@/types";
+import type { ChatMessage, ConversationSummary, ResearchRun } from "@/types";
 
 export const databaseStatus = {
   connected: false,
@@ -70,6 +70,48 @@ export async function deleteSessionData(sessionId: string) {
     databaseStatus.connected = true;
   } catch {
     databaseStatus.connected = false;
+  }
+}
+
+// Durable conversation list: every session with at least one user message,
+// titled by that first message. Redis holds the same summaries, but only
+// Postgres is guaranteed to have every session.
+export async function listSessionSummaries(limit = 100): Promise<ConversationSummary[]> {
+  const pool = getPostgresPool();
+
+  if (!pool) {
+    return [];
+  }
+
+  try {
+    await ensurePostgresSchema();
+    const result = await pool.query<{ session_id: string; title: string; updated_at: string }>(
+      `
+        SELECT s.session_id, first_message.content AS title, s.updated_at
+        FROM aegis_sessions s
+        JOIN LATERAL (
+          SELECT content
+          FROM aegis_messages m
+          WHERE m.session_id = s.session_id AND m.role = 'user'
+          ORDER BY m.created_at ASC
+          LIMIT 1
+        ) first_message ON TRUE
+        ORDER BY s.updated_at DESC
+        LIMIT $1;
+      `,
+      [limit]
+    );
+
+    databaseStatus.connected = true;
+
+    return result.rows.map((row) => ({
+      sessionId: row.session_id,
+      title: row.title.slice(0, 64),
+      updatedAt: new Date(row.updated_at).toISOString()
+    }));
+  } catch {
+    databaseStatus.connected = false;
+    return [];
   }
 }
 

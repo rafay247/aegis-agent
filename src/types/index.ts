@@ -30,6 +30,8 @@ export type RetrievalChunk = {
 };
 
 export type AgentPlan = {
+  // Where the user asked Aegis to look; runs saved before modes existed lack it.
+  mode?: "web" | "docs";
   useSearch: boolean;
   useRag: boolean;
   reasoning: string;
@@ -113,4 +115,7 @@ export type ChatResponse = {
   citations: ResearchSource[];
   messages: ChatMessage[];
   run: ResearchRun;
+  // Every chat run in the conversation, newest first, so each assistant
+  // message can show its own sources and steps (see runsByAssistantMessage).
+  runs?: ResearchRun[];
 };

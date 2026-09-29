@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteSessionData, listResearchRuns } from "@/lib/db";
 import { deleteConversationMemory, loadConversationMessages, loadConversationRuns } from "@/lib/memory";
+import { mergeRuns } from "@/lib/history";
 import type { AgentPlan, ChatResponse } from "@/types";
 
 const emptyPlan: AgentPlan = {
@@ -19,8 +20,9 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   const { sessionId } = await context.params;
   const messages = await loadConversationMessages(sessionId);
-  const memoryRuns = await loadConversationRuns(sessionId);
-  const runs = memoryRuns.length > 0 ? memoryRuns : await listResearchRuns(sessionId);
+  // Redis and Postgres can each be missing runs the other saved.
+  const [memoryRuns, databaseRuns] = await Promise.all([loadConversationRuns(sessionId), listResearchRuns(sessionId)]);
+  const runs = mergeRuns(memoryRuns, databaseRuns);
   // Brief runs (`POST /api/brief`) are stored on the same session's run list as
   // chat runs, but they belong to the Brief panel, not the chat transcript.
   // Reconstruct the chat response from the most recent *chat* run so a brief
@@ -43,6 +45,7 @@ export async function GET(_request: Request, context: RouteContext) {
     plan: latestRun?.plan ?? emptyPlan,
     citations: latestRun?.citations ?? [],
     messages,
+    runs: runs.filter((run) => !run.brief),
     run:
       latestRun ??
       {

@@ -17,6 +17,15 @@ export async function getRedisClient() {
     return globalThis.__aegisRedisClient__;
   }
 
+  // With reconnectStrategy disabled, a client whose socket dropped (e.g. a
+  // serverless instance frozen between requests) never recovers, yet its
+  // resolved connect promise would keep handing it out and every command
+  // would silently fall back to in-process memory. Start over instead.
+  if (globalThis.__aegisRedisClient__ && !globalThis.__aegisRedisClient__.isOpen) {
+    globalThis.__aegisRedisClient__ = undefined;
+    globalThis.__aegisRedisConnectPromise__ = undefined;
+  }
+
   if (!globalThis.__aegisRedisClient__) {
     const client = createClient({
       url: env.redisUrl,
