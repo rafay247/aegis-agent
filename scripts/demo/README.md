@@ -1,10 +1,15 @@
 # Demo video tooling
 
-Regenerates `docs/media/aegis-demo.mp4` / `.gif`: a real Playwright recording of
-the running app — Part 1: pasting text AND uploading a PDF into RAG, then
-asking a question answered from that content; Part 2: Smart Search
-researching the web — with Piper TTS narration (male voice, audio only, no
-subtitles), sped up to fit ~20-25s.
+Regenerates `docs/media/aegis-demo.mp4` / `.gif` and `docs/screenshots/*.png`:
+a real Playwright recording of the running app, with Piper TTS narration
+(male voice, audio only, no subtitles).
+
+- **Part 1 (docs):** upload a PDF in the My documents window, switch to
+  "My documents", ask a question answered only by that PDF — live search
+  steps, the streamed answer, and a document citation card.
+- **Part 2 (web):** switch to "Web", ask a live question — live steps, the
+  streamed answer, a web citation card, and the history sidebar; ends on
+  the light theme.
 
 ## Setup (one time)
 
@@ -27,19 +32,32 @@ curl -fsSL -o voices/en_US-ryan-medium.onnx.json \
 
 ## Regenerate
 
-1. Start the app: `npm run dev` (needs real `OPENAI_API_KEY`, `TAVILY_API_KEY`,
-   `DATABASE_URL` in `.env.local` — this records real RAG + web search calls).
-2. From `scripts/demo/` with the venv active:
+1. Build and start the app with real `OPENAI_API_KEY` and `TAVILY_API_KEY`
+   in `.env.local`. To keep demo data out of your real database, blank the
+   stores for this run (the app then uses its in-memory fallbacks):
 
    ```bash
-   python record.py        # generates assets/*.pdf, records raw/rag.webm + raw/web.webm
-   python narrate.py       # synthesizes narration_audio/*.wav
-   python build_video.py   # writes docs/media/aegis-demo.mp4 + .gif
+   npm run build
+   DATABASE_URL= REDIS_URL= BRAINTRUST_API_KEY= npx next start -p 3000
    ```
 
-`record.py` renders its own sample PDF with Playwright (`page.pdf()`) into
-`assets/` before recording, so no PDF needs to be committed. Edit
-`narration.py` to change the narration lines or per-segment time budget.
+   (`AEGIS_URL` overrides the default `http://localhost:3000`.)
+2. From `scripts/demo/`:
+
+   ```bash
+   .venv/bin/python record.py        # assets/*.pdf, raw/docs.webm + raw/web.webm, docs/screenshots/*.png
+   .venv/bin/python narrate.py       # narration_audio/*.wav
+   .venv/bin/python build_video.py   # docs/media/aegis-demo.mp4 + .gif
+   ```
+
+`record.py` renders its own sample PDF into `assets/`, so no PDF needs to be
+committed. Edit `narration.py` to change the narration lines or each
+segment's time budget; keep the budgets close to the raw clip lengths
+(printed by `build_video.py`) to avoid long frozen frames.
+
+If a recording fails waiting for live steps, the agent probably hit its
+fallback (for example a transient OpenAI error right after many requests);
+wait a moment and run `record.py` again.
 
 ## Note on Postgres/Redis timeouts
 

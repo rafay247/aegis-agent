@@ -1,36 +1,30 @@
-"""Record raw demo footage for the Aegis README video.
+"""Record raw demo footage and README screenshots for Aegis.
 
-Drives the real running app (npm run dev must already be up on
-http://localhost:3000, with real API keys in .env.local) with Playwright and
-records two segments:
+Drives the real running app with Playwright (start it first, see README.md)
+and records two segments:
 
-  1. rag - paste a document AND upload a PDF into RAG, then ask a question
-     that can only be answered from the PDF's content.
-  2. web - toggle Smart Search, ask a live question, show cited web sources.
+  1. docs - upload a PDF in the My documents window, switch to "My
+     documents" mode, ask a question answered only by that PDF: live search
+     steps, the streamed answer, and a document citation card.
+  2. web  - in "Web" mode, ask a live question: live search steps, the
+     streamed answer, a web citation card, and the history sidebar.
 
-Output: scripts/demo/raw/rag.webm, scripts/demo/raw/web.webm
+Output: scripts/demo/raw/docs.webm, scripts/demo/raw/web.webm and
+docs/screenshots/*.png
 """
 
+import os
 import pathlib
 import sys
 
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import expect, sync_playwright
 
-BASE_URL = "http://localhost:3000"
+BASE_URL = os.environ.get("AEGIS_URL", "http://localhost:3000")
 HERE = pathlib.Path(__file__).parent
 RAW_DIR = HERE / "raw"
 ASSETS_DIR = HERE / "assets"
+SCREENSHOTS_DIR = HERE.parent.parent / "docs" / "screenshots"
 VIEWPORT = {"width": 1280, "height": 800}
-
-RAG_TITLE = "Aegis Architecture"
-RAG_TEXT = (
-    "Aegis is a ReAct research agent built on Next.js. Each turn it builds a "
-    "plan, then either searches the web with Tavily or retrieves from its own "
-    "pgvector-backed RAG store, calls OpenAI's Responses API to synthesize a "
-    "cited answer, and falls back to a local template synthesizer or an "
-    "in-process runtime store whenever Redis, Postgres, or OpenAI are "
-    "unavailable."
-)
 
 PDF_FILENAME = "RAG Pipeline Notes.pdf"
 PDF_TEXT = (
@@ -41,10 +35,7 @@ PDF_TEXT = (
     "for fast retrieval."
 )
 
-RAG_QUESTION = (
-    "According to the PDF you loaded, how many characters are in each RAG "
-    "chunk, and how much do chunks overlap?"
-)
+DOCS_QUESTION = "How big is each chunk, and how much do chunks overlap?"
 WEB_QUESTION = "What is the latest stable version of Node.js, and when was it released?"
 
 
@@ -67,74 +58,110 @@ def generate_sample_pdf(browser) -> pathlib.Path:
     return pdf_path
 
 
-def record_rag_segment(browser, pdf_path: pathlib.Path):
-    context = browser.new_context(
+def new_recording_context(browser, storage_state=None):
+    return browser.new_context(
         viewport=VIEWPORT,
         record_video_dir=str(RAW_DIR),
         record_video_size=VIEWPORT,
+        storage_state=storage_state,
+        color_scheme="dark",
     )
+
+
+def ask(page, question: str, screenshot: str | None = None):
+    composer = page.locator(".compact-composer textarea")
+    composer.click()
+    composer.press_sequentially(question, delay=18)
+    page.wait_for_timeout(300)
+    page.get_by_label("Send message").click()
+
+    # Live search steps appear while the agent works...
+    expect(page.locator(".live-steps li").first).to_be_visible(timeout=30_000)
+    # ...then the answer streams in. A short answer can finish streaming
+    # between polls, so only the screenshot depends on catching it mid-stream.
+    streaming = page.locator(".message-content.streaming")
+    try:
+        expect(streaming).to_be_visible(timeout=60_000)
+        if screenshot:
+            page.screenshot(path=str(SCREENSHOTS_DIR / screenshot))
+    except AssertionError:
+        print("Answer finished before the streaming state was observed.")
+    expect(page.locator(".live-answer")).to_be_hidden(timeout=90_000)
+    page.wait_for_timeout(700)
+
+
+def show_citation(page, selector: str):
+    """Hover the first inline citation (or source chip) so its card shows."""
+    refs = page.locator(f".message-content {selector}")
+    if refs.count() > 0:
+        refs.first.hover()
+        page.wait_for_timeout(1800)
+        return True
+    return False
+
+
+def record_docs_segment(browser, pdf_path: pathlib.Path):
+    context = new_recording_context(browser)
     page = context.new_page()
     page.goto(BASE_URL)
+    page.wait_for_timeout(1200)
+    page.screenshot(path=str(SCREENSHOTS_DIR / "01-home.png"))
 
-    page.get_by_label("Attach sources").click()
-
-    # Part 1a: paste text content into RAG.
-    page.get_by_label("Source title").fill(RAG_TITLE)
-    page.get_by_label("Explicit content for RAG search").fill(RAG_TEXT)
-    page.get_by_role("button", name="Add to RAG").click()
-    expect(page.locator(".source-ingest-status")).to_have_text(
-        "Explicit content added to RAG.", timeout=30_000
-    )
-    page.wait_for_timeout(500)
-
-    # Part 1b: upload a PDF into RAG.
-    page.get_by_label(f"Upload up to 3 PDF sources").set_input_files(str(pdf_path))
-    page.get_by_role("button", name="Add to RAG").click()
-    expect(page.locator(".source-ingest-status")).to_have_text(
-        "1 PDF added to RAG.", timeout=30_000
-    )
+    # Upload a PDF through the My documents window.
+    page.get_by_label("Manage my documents").click()
     page.wait_for_timeout(600)
-    page.locator(".source-modal-close").click()
+    page.locator(".documents-dropzone input[type=file]").set_input_files(str(pdf_path))
+    page.wait_for_timeout(700)
+    page.locator(".documents-submit").click()
+    expect(page.locator(".documents-status.success")).to_be_visible(timeout=60_000)
+    page.wait_for_timeout(1200)
+    page.screenshot(path=str(SCREENSHOTS_DIR / "02-documents.png"))
+    page.get_by_label("Close").click()
+    page.wait_for_timeout(400)
 
-    # Part 1c: ask a question answerable only from the PDF.
-    page.get_by_placeholder("Message Aegis").fill(RAG_QUESTION)
-    page.get_by_label("Send message").click()
-    expect(page.locator(".agent-thinking")).to_be_hidden(timeout=90_000)
-    expect(page.locator(".message-content").last).to_be_visible()
-    page.wait_for_timeout(1500)
+    # Ask in My documents mode.
+    page.get_by_role("radio", name="My documents").click()
+    page.wait_for_timeout(500)
+    ask(page, DOCS_QUESTION)
+    show_citation(page, ".cite-ref.docs")
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(600)
 
+    state = context.storage_state()
     context.close()
-    video_path = page.video.path()
-    return video_path
+    return page.video.path(), state
 
 
-def record_web_segment(browser):
-    context = browser.new_context(
-        viewport=VIEWPORT,
-        record_video_dir=str(RAW_DIR),
-        record_video_size=VIEWPORT,
-    )
+def record_web_segment(browser, storage_state):
+    # Same browser workspace, so the history sidebar shows both chats.
+    context = new_recording_context(browser, storage_state)
     page = context.new_page()
     page.goto(BASE_URL)
+    page.wait_for_timeout(1000)
 
-    page.get_by_role("button", name="Smart Search").click()
-    expect(page.get_by_role("button", name="Smart Search")).to_have_attribute(
-        "aria-pressed", "true"
-    )
+    page.get_by_text("New chat").click()
+    page.get_by_role("radio", name="Web").click()
+    page.wait_for_timeout(400)
+    ask(page, WEB_QUESTION, screenshot="03-streaming.png")
 
-    page.get_by_placeholder("Message Aegis").fill(WEB_QUESTION)
-    page.get_by_label("Send message").click()
-    expect(page.locator(".agent-thinking")).to_be_hidden(timeout=90_000)
-    expect(page.locator(".source-chip").first).to_be_visible(timeout=10_000)
-    page.wait_for_timeout(1500)
+    if show_citation(page, ".cite-ref.web"):
+        page.screenshot(path=str(SCREENSHOTS_DIR / "04-citation.png"))
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(800)
+
+    # Light theme still, for the README.
+    page.get_by_label("Switch to light theme").click()
+    page.wait_for_timeout(700)
+    page.screenshot(path=str(SCREENSHOTS_DIR / "05-light-theme.png"))
+    page.wait_for_timeout(600)
 
     context.close()
-    video_path = page.video.path()
-    return video_path
+    return page.video.path()
 
 
 def main():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -142,14 +169,14 @@ def main():
         pdf_path = generate_sample_pdf(browser)
         print(f"Sample PDF generated: {pdf_path}")
 
-        rag_video = record_rag_segment(browser, pdf_path)
-        rag_target = RAW_DIR / "rag.webm"
-        pathlib.Path(rag_video).rename(rag_target)
-        print(f"RAG segment saved: {rag_target}")
+        docs_video, state = record_docs_segment(browser, pdf_path)
+        docs_target = RAW_DIR / "docs.webm"
+        pathlib.Path(docs_video).replace(docs_target)
+        print(f"Docs segment saved: {docs_target}")
 
-        web_video = record_web_segment(browser)
+        web_video = record_web_segment(browser, state)
         web_target = RAW_DIR / "web.webm"
-        pathlib.Path(web_video).rename(web_target)
+        pathlib.Path(web_video).replace(web_target)
         print(f"Web segment saved: {web_target}")
 
         browser.close()

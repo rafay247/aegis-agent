@@ -2,19 +2,20 @@
 
 SEGMENTS = [
     {
-        "name": "rag",
+        "name": "docs",
         "target_seconds": 14.0,
         "line": (
-            "Add a document or upload a PDF into RAG, ask a question, and "
-            "Aegis retrieves the answer straight from your own sources."
+            "Upload a PDF to your private library, switch to My documents, and "
+            "ask. Aegis searches your files live, streams the answer, and every "
+            "citation opens the exact passage it came from."
         ),
     },
     {
         "name": "web",
-        "target_seconds": 9.0,
+        "target_seconds": 13.0,
         "line": (
-            "Switch on Smart Search and Aegis researches the live web, "
-            "citing every source it finds."
+            "Switch to Web and Aegis researches the live internet instead, never "
+            "mixing the two, with a cited source behind every claim."
         ),
     },
 ]

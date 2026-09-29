@@ -2,6 +2,7 @@
 
 import pathlib
 import subprocess
+import sys
 
 from narration import SEGMENTS
 
@@ -12,7 +13,8 @@ OUT_DIR = HERE / "narration_audio"
 
 def synth(text: str, out_path: pathlib.Path):
     subprocess.run(
-        ["piper", "-m", str(VOICE_MODEL), "-f", str(out_path)],
+        # Run as a module: the venv's `piper` launcher breaks if the venv moves.
+        [sys.executable, "-m", "piper", "-m", str(VOICE_MODEL), "-f", str(out_path)],
         input=text,
         text=True,
         check=True,
