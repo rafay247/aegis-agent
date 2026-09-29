@@ -20,3 +20,5 @@ scripts/demo/assets
 scripts/demo/narration_audio
 scripts/demo/build
 scripts/demo/__pycache__
+.vercel
+.env*
