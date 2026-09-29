@@ -1,8 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { BriefResponse, ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
-import { BriefPanel } from "@/app/components/BriefPanel";
+import type { ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
 import { groupConversationsByDate, runsByAssistantMessage } from "@/lib/history";
 
 const conversationsStorageKey = "aegis-conversations";
@@ -357,9 +356,6 @@ export default function Home() {
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
   const [mode, setMode] = useState<SearchMode>("web");
-  const [briefMode, setBriefMode] = useState(false);
-  const [briefResult, setBriefResult] = useState<BriefResponse | null>(null);
-  const [isBriefLoading, setIsBriefLoading] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -463,11 +459,7 @@ export default function Home() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (briefMode) {
-      await submitBrief(prompt);
-    } else {
-      await submitPrompt(prompt);
-    }
+    await submitPrompt(prompt);
   }
 
   async function submitPrompt(message: string) {
@@ -549,45 +541,6 @@ export default function Home() {
       return true;
     } catch {
       return false;
-    }
-  }
-
-  async function submitBrief(topic: string) {
-    const trimmedTopic = topic.trim();
-    if (!sessionId || isBriefLoading || !trimmedTopic) {
-      return;
-    }
-
-    setIsBriefLoading(true);
-    setError("");
-    setNotice("");
-    setPrompt("");
-    setBriefResult(null);
-
-    try {
-      const apiResponse = await fetch("/api/brief", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ sessionId, topic: trimmedTopic })
-      });
-
-      if (!apiResponse.ok) {
-        const body = (await apiResponse.json()) as { error?: string };
-        throw new Error(body.error ?? "Aegis could not generate the brief.");
-      }
-
-      const data = (await apiResponse.json()) as BriefResponse;
-      setBriefResult(data);
-    } catch (submissionError) {
-      setError(
-        submissionError instanceof Error
-          ? submissionError.message
-          : "Something went wrong while generating the brief."
-      );
-    } finally {
-      setIsBriefLoading(false);
     }
   }
 
@@ -730,7 +683,6 @@ export default function Home() {
     setPrompt("");
     setError("");
     setNotice("");
-    setBriefResult(null);
   }
 
   async function openConversationById(nextSessionId: string, fallbackResponse: ChatResponse | null = null) {
@@ -741,7 +693,6 @@ export default function Home() {
     setPrompt("");
     setError("");
     setNotice("");
-    setBriefResult(null);
 
     try {
       const apiResponse = await fetch(`/api/conversations/${encodeURIComponent(nextSessionId)}`);
@@ -1017,23 +968,6 @@ export default function Home() {
             <div ref={conversationEndRef} />
           </div>
 
-          {briefResult ? (
-            <div className="brief-panel-wrapper">
-              <BriefPanel brief={briefResult.brief} />
-            </div>
-          ) : null}
-
-          {isBriefLoading ? (
-            <div className="agent-thinking brief-loading" aria-label="Generating brief">
-              <div className="typing-bar">
-                <span />
-                <span />
-                <span />
-              </div>
-              <span className="agent-thinking-label">Writing a brief from your documents…</span>
-            </div>
-          ) : null}
-
           {error ? <div className="error-banner" role="alert">{error}</div> : null}
           {notice ? <div className="notice-banner" role="status">{notice}</div> : null}
 
@@ -1043,13 +977,7 @@ export default function Home() {
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={1}
-              placeholder={
-                briefMode
-                  ? "Brief topic (e.g. \"summarize the risk framework\")"
-                  : mode === "web"
-                    ? "Ask anything — Aegis will search the web"
-                    : "Ask about your documents"
-              }
+              placeholder={mode === "web" ? "Ask anything — Aegis will search the web" : "Ask about your documents"}
             />
             {needsDocuments ? (
               <p className="composer-hint">
@@ -1066,48 +994,29 @@ export default function Home() {
             ) : null}
             <div className="composer-actions-row">
               <div className="composer-mode-pills">
-                {briefMode ? (
-                  <span className="mode-switch-static" title="Briefs are always written from your documents">
+                <div className="mode-switch" role="radiogroup" aria-label="Where to search">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === "web"}
+                    className={mode === "web" ? "active" : ""}
+                    onClick={() => chooseMode("web")}
+                  >
+                    <GlobeIcon />
+                    <span>Web</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === "docs"}
+                    className={mode === "docs" ? "active" : ""}
+                    onClick={() => chooseMode("docs")}
+                  >
                     <DocStepIcon />
-                    My documents
-                  </span>
-                ) : (
-                  <div className="mode-switch" role="radiogroup" aria-label="Where to search">
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={mode === "web"}
-                      className={mode === "web" ? "active" : ""}
-                      onClick={() => chooseMode("web")}
-                    >
-                      <GlobeIcon />
-                      <span>Web</span>
-                    </button>
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={mode === "docs"}
-                      className={mode === "docs" ? "active" : ""}
-                      onClick={() => chooseMode("docs")}
-                    >
-                      <DocStepIcon />
-                      <span>My documents</span>
-                      <span className="mode-switch-count">{knowledgeSources.length}</span>
-                    </button>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className={`composer-mode-pill ${briefMode ? "active" : ""}`}
-                  aria-pressed={briefMode}
-                  onClick={() => {
-                    setBriefMode((current) => !current);
-                    setBriefResult(null);
-                  }}
-                >
-                  <DocStepIcon />
-                  <span>Brief</span>
-                </button>
+                    <span>My documents</span>
+                    <span className="mode-switch-count">{knowledgeSources.length}</span>
+                  </button>
+                </div>
               </div>
               <div className="composer-actions">
                 <button
@@ -1119,7 +1028,7 @@ export default function Home() {
                 >
                   <AttachmentIcon />
                 </button>
-                <button type="submit" className="composer-send-button" disabled={isLoading || isBriefLoading || !prompt.trim()} aria-label="Send message">
+                <button type="submit" className="composer-send-button" disabled={isLoading || !prompt.trim()} aria-label="Send message">
                   <SendIcon />
                 </button>
               </div>

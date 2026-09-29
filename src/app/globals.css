@@ -179,7 +179,12 @@ button {
   text-transform: uppercase;
 }
 
+.history-sidebar > :not(.conversation-history-list) {
+  flex: 0 0 auto;
+}
+
 .conversation-history-list {
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   gap: 2px;
@@ -332,13 +337,60 @@ button {
   scrollbar-color: var(--border-strong) transparent;
 }
 
-.conversation-scroll::-webkit-scrollbar {
-  width: 8px;
+/* Scrollbars: thin, rounded, and out of the way until needed */
+.conversation-scroll,
+.conversation-history-list,
+.rag-source-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
-.conversation-scroll::-webkit-scrollbar-thumb {
+.conversation-scroll::-webkit-scrollbar,
+.conversation-history-list::-webkit-scrollbar,
+.rag-source-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.conversation-scroll::-webkit-scrollbar-track,
+.conversation-history-list::-webkit-scrollbar-track,
+.rag-source-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.conversation-scroll::-webkit-scrollbar-thumb,
+.conversation-history-list::-webkit-scrollbar-thumb,
+.rag-source-list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
   border-radius: 999px;
-  background: var(--border-strong);
+  background: var(--border-strong) padding-box;
+}
+
+.conversation-scroll::-webkit-scrollbar-thumb:hover,
+.conversation-history-list::-webkit-scrollbar-thumb:hover,
+.rag-source-list::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-soft) padding-box;
+}
+
+/* The history list only shows its scrollbar while hovered or focused. */
+@media (hover: hover) {
+  .conversation-history-list {
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 160ms ease;
+  }
+
+  .conversation-history-list:hover,
+  .conversation-history-list:focus-within {
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  .conversation-history-list::-webkit-scrollbar-thumb {
+    background: transparent;
+  }
+
+  .conversation-history-list:hover::-webkit-scrollbar-thumb,
+  .conversation-history-list:focus-within::-webkit-scrollbar-thumb {
+    background: var(--border-strong) padding-box;
+  }
 }
 
 /* Empty state */
@@ -587,65 +639,6 @@ a.source-chip:hover {
   font-weight: 600;
 }
 
-/* Brief panel */
-.brief-panel-wrapper {
-  margin: 0 0 16px;
-}
-
-.brief-panel {
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--hover);
-}
-
-.brief-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.brief-panel-header h3 {
-  margin: 0;
-  font-size: 0.95rem;
-  color: var(--text-strong);
-}
-
-.composer-icon-button.brief-export-button {
-  font-size: 0.72rem;
-  width: auto;
-  padding: 0 12px;
-  height: 28px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-}
-
-.brief-section {
-  margin-bottom: 14px;
-}
-
-.brief-section:last-of-type {
-  margin-bottom: 8px;
-}
-
-.brief-section h4 {
-  margin: 0 0 4px;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-}
-
-.brief-section p {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.88rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
 /* Thinking indicator */
 .agent-thinking {
   display: flex;
@@ -762,32 +755,8 @@ a.source-chip:hover {
   gap: 8px;
 }
 
-.composer-mode-pill {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  padding: 0 13px 0 11px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  white-space: nowrap;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-}
 
-.composer-mode-pill:hover {
-  background: var(--hover);
-  color: var(--text);
-}
 
-.composer-mode-pill.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
 
 .composer-pill-icon,
 .composer-action-icon {
@@ -1267,8 +1236,7 @@ a.source-chip:hover {
   gap: 2px;
 }
 
-.mode-switch button,
-.mode-switch-static {
+.mode-switch button {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -1291,8 +1259,7 @@ a.source-chip:hover {
   outline-offset: 1px;
 }
 
-.mode-switch button svg,
-.mode-switch-static svg {
+.mode-switch button svg {
   width: 16px;
   height: 16px;
 }
@@ -1304,11 +1271,6 @@ a.source-chip:hover {
 
 .mode-switch button[aria-checked="true"]:last-child {
   background: var(--docs-soft);
-  color: var(--docs);
-}
-
-.mode-switch-static {
-  border: 1px solid var(--border);
   color: var(--docs);
 }
 
@@ -1362,11 +1324,6 @@ a.source-chip:hover {
 .capability-card.mode-card.active:last-child {
   border-color: var(--docs);
   background: var(--docs-soft);
-}
-
-.brief-loading {
-  width: min(768px, calc(100% - 32px));
-  margin: 0 auto 12px;
 }
 
 .rag-source-item-header {
