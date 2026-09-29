@@ -1,5 +1,5 @@
 import { EMBEDDING_MODEL, embedText, embedTexts } from "@/lib/rag/embeddings";
-import { insertChunks, listVectorSources, searchChunks, vectorStoreReady } from "@/lib/rag/vector-store";
+import { deleteVectorSource, insertChunks, listVectorSources, searchChunks, vectorStoreReady } from "@/lib/rag/vector-store";
 import type { ResearchSource, RetrievalChunk } from "@/types";
 
 export const ragConfig = {
@@ -7,9 +7,15 @@ export const ragConfig = {
   embeddingModel: EMBEDDING_MODEL
 };
 
+declare global {
+  var __aegisKnowledgeBase__: RetrievalChunk[] | undefined;
+}
+
 // In-memory fallback store: used when pgvector/embeddings are unavailable.
 // Each document is kept whole here and matched with naive token overlap.
-const userKnowledgeBase: RetrievalChunk[] = [];
+// Kept on globalThis because every route handler is bundled separately, so a
+// module-level array would give each route its own, disconnected copy.
+const userKnowledgeBase: RetrievalChunk[] = (globalThis.__aegisKnowledgeBase__ ??= []);
 
 // Chunking keeps embeddings focused and improves retrieval precision.
 const CHUNK_SIZE = 1200;
@@ -89,6 +95,20 @@ export async function addKnowledgeDocument({ title, text }: { title: string; tex
   }
 
   return source;
+}
+
+// Removes a document from both stores. Returns false if neither had it.
+export async function deleteKnowledgeDocument(sourceId: string): Promise<boolean> {
+  let removedFromMemory = false;
+  for (let index = userKnowledgeBase.length - 1; index >= 0; index -= 1) {
+    if (userKnowledgeBase[index].source.id === sourceId) {
+      userKnowledgeBase.splice(index, 1);
+      removedFromMemory = true;
+    }
+  }
+
+  const removedChunks = (await vectorStoreReady()) ? await deleteVectorSource(sourceId) : null;
+  return removedFromMemory || (removedChunks ?? 0) > 0;
 }
 
 export async function listKnowledgeSources(): Promise<ResearchSource[]> {

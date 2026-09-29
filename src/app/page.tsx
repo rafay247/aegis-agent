@@ -681,6 +681,25 @@ export default function Home() {
     }
   }
 
+  async function removeKnowledgeSource(source: ResearchSource) {
+    if (!window.confirm(`Remove "${source.title}" from your documents? This can't be undone.`)) {
+      return;
+    }
+
+    try {
+      const apiResponse = await fetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
+      const body = (await apiResponse.json().catch(() => ({}))) as { sources?: ResearchSource[]; error?: string };
+      if (!apiResponse.ok) {
+        throw new Error(body.error ?? "The document could not be removed.");
+      }
+
+      setKnowledgeSources(body.sources ?? knowledgeSources.filter((current) => current.id !== source.id));
+      setSourceStatus(`Removed "${source.title}".`);
+    } catch (removeError) {
+      setSourceStatus(removeError instanceof Error ? removeError.message : "The document could not be removed.");
+    }
+  }
+
   function saveConversation(data: ChatResponse, submittedPrompt: string) {
     const firstUserMessage =
       data.messages.find((message) => message.role === "user")?.content || submittedPrompt;
@@ -842,8 +861,16 @@ export default function Home() {
                   {knowledgeSources.length > 0 ? (
                     knowledgeSources.map((source) => (
                       <article key={source.id} className="rag-source-item" title={source.title}>
-                        <div>
+                        <div className="rag-source-item-header">
                           <h3>{source.title}</h3>
+                          <button
+                            type="button"
+                            className="rag-source-remove"
+                            aria-label={`Remove ${source.title}`}
+                            onClick={() => void removeKnowledgeSource(source)}
+                          >
+                            Remove
+                          </button>
                         </div>
                         <p>{source.snippet}</p>
                       </article>

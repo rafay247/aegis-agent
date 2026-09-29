@@ -183,3 +183,19 @@ export async function listVectorSources(): Promise<ResearchSource[] | null> {
     return null;
   }
 }
+
+// Removes every chunk of one document. Returns the number of chunks deleted,
+// or null if the vector store is unavailable.
+export async function deleteVectorSource(sourceId: string): Promise<number | null> {
+  const pool = getPostgresPool();
+  if (!pool || !(await ensureVectorSchema())) {
+    return null;
+  }
+
+  try {
+    const result = await pool.query("DELETE FROM aegis_knowledge_chunks WHERE source_id = $1;", [sourceId]);
+    return result.rowCount ?? 0;
+  } catch {
+    return null;
+  }
+}
