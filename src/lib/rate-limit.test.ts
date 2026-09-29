@@ -45,14 +45,19 @@ test("buckets and clients are counted separately", async () => {
   assert.equal((await limit({ bucket: "upload", id: "a", limit: 1, windowSeconds: 60 })).allowed, true);
 });
 
-test("fails open when Redis is unavailable or errors", async () => {
-  const none = createRateLimiter(async () => null);
-  assert.equal((await none({ bucket: "chat", id: "a", limit: 1, windowSeconds: 60 })).allowed, true);
-
-  const broken = createRateLimiter(async () => {
-    throw new Error("down");
-  });
-  assert.equal((await broken({ bucket: "chat", id: "a", limit: 1, windowSeconds: 60 })).allowed, true);
+test("still enforces limits in-process when Redis is unavailable or errors", async () => {
+  for (const getStore of [
+    async () => null,
+    async () => {
+      throw new Error("down");
+    }
+  ]) {
+    const limit = createRateLimiter(getStore);
+    const rule = { bucket: "chat", id: "a", limit: 2, windowSeconds: 60 };
+    const results = [await limit(rule), await limit(rule), await limit(rule)];
+    assert.deepEqual(results.map((result) => result.allowed), [true, true, false]);
+    assert.ok(results[2].retryAfterSeconds > 0);
+  }
 });
 
 test("clientIp prefers the first x-forwarded-for hop", () => {
