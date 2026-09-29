@@ -119,3 +119,16 @@ export type ChatResponse = {
   // message can show its own sources and steps (see runsByAssistantMessage).
   runs?: ResearchRun[];
 };
+
+// Newline-delimited JSON events streamed by POST /api/chat when the client
+// sends `Accept: application/x-ndjson`.
+export type AgentStreamEvent =
+  | { type: "tool_start"; id: string; tool: "web_search" | "search_knowledge"; query: string }
+  | { type: "tool_end"; step: AgentStep }
+  | { type: "sources"; sources: ResearchSource[] }
+  | { type: "delta"; text: string }
+  // Text streamed so far was not the answer (a preamble before a tool call,
+  // or a failed attempt before the fallback): clear it.
+  | { type: "reset" }
+  | { type: "done"; response: ChatResponse }
+  | { type: "error"; error: string };

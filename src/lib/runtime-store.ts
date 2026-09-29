@@ -1,6 +1,7 @@
 import type { ChatMessage, ConversationSummary, ResearchRun } from "@/types";
 
 type SessionState = {
+  workspaceId?: string;
   messages: ChatMessage[];
   runs: ResearchRun[];
   summary?: ConversationSummary;
@@ -33,6 +34,11 @@ export function getSessionState(sessionId: string): SessionState {
 
   store.set(sessionId, created);
   return created;
+}
+
+// Like getSessionState, but never creates an entry.
+export function peekSessionState(sessionId: string): SessionState | undefined {
+  return getStore().get(sessionId);
 }
 
 export function listSessionStates() {

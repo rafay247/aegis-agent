@@ -3,6 +3,7 @@ import { callChatModel, hasOpenAiConfig } from "@/lib/agent/openai";
 import type { ChatModelMessage, ChatTool } from "@/lib/agent/openai";
 import { appendResearchRunMemory } from "@/lib/memory";
 import { retrieveKnowledge } from "@/lib/rag";
+import { DEMO_WORKSPACE } from "@/lib/workspace";
 import { tracedSpan } from "@/lib/observability";
 import { createId, cleanSourceText, KNOWLEDGE_TOOL, createSourceRegistry } from "@/lib/agent";
 import { parseBriefSections, REQUIRED_BRIEF_SECTIONS } from "@/lib/agent/brief-sections";
@@ -38,7 +39,7 @@ type BriefAgentResult = {
   steps: AgentStep[];
 };
 
-export async function runBriefAgent(topic: string): Promise<BriefAgentResult> {
+export async function runBriefAgent(topic: string, workspaceId = DEMO_WORKSPACE): Promise<BriefAgentResult> {
   const { sources, registerSources } = createSourceRegistry();
   const steps: AgentStep[] = [];
   const tools: ChatTool[] = [KNOWLEDGE_TOOL];
@@ -70,7 +71,7 @@ export async function runBriefAgent(topic: string): Promise<BriefAgentResult> {
       }
 
       const startedAt = new Date();
-      const chunks = await tracedSpan("brief.tool_call", () => retrieveKnowledge(query), { query });
+      const chunks = await tracedSpan("brief.tool_call", () => retrieveKnowledge(query, 6, workspaceId), { query });
       const found = chunks.map((chunk) => ({ ...chunk.source, content: chunk.text }));
       const observation = registerSources(found);
 
@@ -146,13 +147,13 @@ function synthesizeBriefLocally(topic: string, chunks: RetrievalChunk[]): { sect
   };
 }
 
-async function runBriefFallback(topic: string): Promise<BriefAgentResult> {
-  const chunks = await retrieveKnowledge(topic, 5);
+async function runBriefFallback(topic: string, workspaceId: string): Promise<BriefAgentResult> {
+  const chunks = await retrieveKnowledge(topic, 5, workspaceId);
   const fallback = synthesizeBriefLocally(topic, chunks);
   return { title: topic, sections: fallback.sections, citations: fallback.citations, steps: [] };
 }
 
-export async function runBrief(request: BriefRequest): Promise<BriefResponse> {
+export async function runBrief(request: BriefRequest, workspaceId: string): Promise<BriefResponse> {
   const { sessionId, topic } = request;
 
   let result: BriefAgentResult;
@@ -160,18 +161,18 @@ export async function runBrief(request: BriefRequest): Promise<BriefResponse> {
 
   if (hasOpenAiConfig()) {
     try {
-      result = await runBriefAgent(topic);
+      result = await runBriefAgent(topic, workspaceId);
       usedModel = "openai-brief-agent";
 
       if (result.sections.every((section) => !section.content)) {
         throw new Error("Brief agent produced no content.");
       }
     } catch {
-      result = await runBriefFallback(topic);
+      result = await runBriefFallback(topic, workspaceId);
       usedModel = "local-brief-fallback";
     }
   } else {
-    result = await runBriefFallback(topic);
+    result = await runBriefFallback(topic, workspaceId);
     usedModel = "local-brief-fallback";
   }
 

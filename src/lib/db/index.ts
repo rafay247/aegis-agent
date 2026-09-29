@@ -73,10 +73,91 @@ export async function deleteSessionData(sessionId: string) {
   }
 }
 
-// Durable conversation list: every session with at least one user message,
-// titled by that first message. Redis holds the same summaries, but only
-// Postgres is guaranteed to have every session.
-export async function listSessionSummaries(limit = 100): Promise<ConversationSummary[]> {
+// Records which workspace owns a session. The first workspace to use a
+// session keeps it; returns the owner, or undefined if Postgres is unavailable.
+export async function assignSessionWorkspace(sessionId: string, workspaceId: string): Promise<string | undefined> {
+  const pool = getPostgresPool();
+
+  if (!pool) {
+    return undefined;
+  }
+
+  try {
+    await ensurePostgresSchema();
+    const result = await pool.query<{ workspace_id: string }>(
+      `
+        INSERT INTO aegis_sessions (session_id, workspace_id)
+        VALUES ($1, $2)
+        ON CONFLICT (session_id)
+        DO UPDATE SET workspace_id = COALESCE(aegis_sessions.workspace_id, EXCLUDED.workspace_id)
+        RETURNING workspace_id;
+      `,
+      [sessionId, workspaceId]
+    );
+    databaseStatus.connected = true;
+    return result.rows[0]?.workspace_id;
+  } catch {
+    databaseStatus.connected = false;
+    return undefined;
+  }
+}
+
+// The owning workspace: a string, null when the session exists without an
+// owner (created before workspaces), or undefined when unknown (no row, or
+// Postgres unavailable).
+export async function getSessionWorkspace(sessionId: string): Promise<string | null | undefined> {
+  const pool = getPostgresPool();
+
+  if (!pool) {
+    return undefined;
+  }
+
+  try {
+    await ensurePostgresSchema();
+    const result = await pool.query<{ workspace_id: string | null }>(
+      "SELECT workspace_id FROM aegis_sessions WHERE session_id = $1;",
+      [sessionId]
+    );
+    databaseStatus.connected = true;
+    return result.rows.length === 0 ? undefined : result.rows[0].workspace_id;
+  } catch {
+    databaseStatus.connected = false;
+    return undefined;
+  }
+}
+
+// Moves sessions created before workspaces existed into a workspace. Only
+// unowned sessions can be claimed, so this never takes anyone's conversation.
+export async function claimUnownedSessions(workspaceId: string, sessionIds: string[]): Promise<string[]> {
+  const pool = getPostgresPool();
+
+  if (!pool || sessionIds.length === 0) {
+    return [];
+  }
+
+  try {
+    await ensurePostgresSchema();
+    const result = await pool.query<{ session_id: string }>(
+      `
+        UPDATE aegis_sessions
+        SET workspace_id = $1
+        WHERE session_id = ANY($2::text[]) AND workspace_id IS NULL
+        RETURNING session_id;
+      `,
+      [workspaceId, sessionIds]
+    );
+    databaseStatus.connected = true;
+    return result.rows.map((row) => row.session_id);
+  } catch {
+    databaseStatus.connected = false;
+    return [];
+  }
+}
+
+// Durable conversation list for one workspace: every session with at least
+// one user message, titled by that first message. Redis holds the same
+// summaries, but only Postgres is guaranteed to have every session.
+export async function listSessionSummaries(workspaceId: string, limit = 100): Promise<ConversationSummary[]> {
   const pool = getPostgresPool();
 
   if (!pool) {
@@ -96,10 +177,11 @@ export async function listSessionSummaries(limit = 100): Promise<ConversationSum
           ORDER BY m.created_at ASC
           LIMIT 1
         ) first_message ON TRUE
+        WHERE s.workspace_id = $1
         ORDER BY s.updated_at DESC
-        LIMIT $1;
+        LIMIT $2;
       `,
-      [limit]
+      [workspaceId, limit]
     );
 
     databaseStatus.connected = true;

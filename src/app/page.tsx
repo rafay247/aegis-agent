@@ -1,8 +1,9 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
+import type { AgentStep, AgentStreamEvent, ChatResponse, ConversationSummary, ResearchRun, ResearchSource } from "@/types";
 import { DocumentsModal } from "@/app/components/DocumentsModal";
+import { apiFetch, createSessionId, ensureWorkspaceId, readEventStream } from "@/lib/client/api";
 import { groupConversationsByDate, runsByAssistantMessage } from "@/lib/history";
 
 const conversationsStorageKey = "aegis-conversations";
@@ -13,10 +14,6 @@ type SearchMode = "docs" | "web";
 type SavedConversation = ConversationSummary & {
   response?: ChatResponse;
 };
-
-function createSessionId() {
-  return `session-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 function loadSavedConversations() {
   const saved = window.localStorage.getItem(conversationsStorageKey);
@@ -239,11 +236,87 @@ function MoonIcon() {
   );
 }
 
-function renderInlineContent(text: string) {
-  // Split on links and **bold** so answers read naturally.
-  const parts = text.split(/(https?:\/\/[^\s)]+|\*\*[^*]+\*\*)/g);
+function excerpt(text: string, maxLength = 240) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength).replace(/\s+\S*$/, "")}…` : compact;
+}
+
+// An inline [n] reference with a preview card of the source it cites.
+function Citation({ index, source }: { index: number; source?: ResearchSource }) {
+  const cardRef = useRef<HTMLSpanElement | null>(null);
+  const [shift, setShift] = useState(0);
+
+  if (!source) {
+    return <>{`[${index}]`}</>;
+  }
+
+  const isDocument = source.kind === "knowledge";
+  const isLink = !isDocument && source.url.startsWith("http");
+
+  // Keep the card inside the viewport when the reference sits near an edge.
+  function position() {
+    const card = cardRef.current;
+    if (!card) {
+      return;
+    }
+
+    card.style.setProperty("--cite-shift", "0px");
+    const rect = card.getBoundingClientRect();
+    const margin = 12;
+    let next = 0;
+    if (rect.right > window.innerWidth - margin) {
+      next = window.innerWidth - margin - rect.right;
+    } else if (rect.left < margin) {
+      next = margin - rect.left;
+    }
+
+    setShift(next);
+  }
+
+  const card = (
+    <span
+      ref={cardRef}
+      className="cite-card"
+      role="tooltip"
+      style={{ "--cite-shift": `${shift}px` } as React.CSSProperties}
+    >
+      <span className={`cite-card-meta ${isDocument ? "docs" : "web"}`}>
+        {isDocument ? <DocStepIcon /> : <GlobeIcon />}
+        {isDocument ? "Your document" : source.domain}
+      </span>
+      <strong className="cite-card-title">{source.title}</strong>
+      <span className="cite-card-excerpt">{excerpt(source.content || source.snippet || "")}</span>
+      {isLink ? <span className="cite-card-open">Open source ↗</span> : null}
+    </span>
+  );
+
+  return (
+    <span className="cite" onMouseEnter={position} onFocus={position}>
+      {isLink ? (
+        <a className={`cite-ref web`} href={source.url} target="_blank" rel="noreferrer" aria-label={`Source ${index}: ${source.title}`}>
+          {index}
+        </a>
+      ) : (
+        <button type="button" className={`cite-ref ${isDocument ? "docs" : "web"}`} aria-label={`Source ${index}: ${source.title}`}>
+          {index}
+        </button>
+      )}
+      {card}
+    </span>
+  );
+}
+
+function renderInlineContent(text: string, sources: ResearchSource[] = []) {
+  // Split on links, **bold** and [n] citations so answers read naturally.
+  const parts = text.split(/(https?:\/\/[^\s)]+|\*\*[^*]+\*\*|\[\d+\])/g);
 
   return parts.map((part, index) => {
+    const citation = /^\[(\d+)\]$/.exec(part);
+    if (citation) {
+      const number = Number(citation[1]);
+      return <Citation key={`cite-${index}`} index={number} source={sources[number - 1]} />;
+    }
+
     if (part.startsWith("http")) {
       return (
         <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">
@@ -260,7 +333,7 @@ function renderInlineContent(text: string) {
   });
 }
 
-function renderMessageContent(content: string) {
+function renderMessageContent(content: string, sources: ResearchSource[] = []) {
   const lines = content.split("\n");
   const blocks: Array<
     | { type: "heading"; text: string; key: string }
@@ -329,14 +402,71 @@ function renderMessageContent(content: string) {
       return (
         <ul key={block.key} className="message-list">
           {block.items.map((item, index) => (
-            <li key={`${item}-${index}`}>{renderInlineContent(item)}</li>
+            <li key={`${item}-${index}`}>{renderInlineContent(item, sources)}</li>
           ))}
         </ul>
       );
     }
 
-    return <p key={block.key}>{renderInlineContent(block.text)}</p>;
+    return <p key={block.key}>{renderInlineContent(block.text, sources)}</p>;
   });
+}
+
+type LiveTurn = {
+  steps: Array<{ id: string; tool: "web_search" | "search_knowledge"; query: string; step?: AgentStep }>;
+  text: string;
+  sources: ResearchSource[];
+};
+
+// The assistant turn while it is still streaming: live search steps, then
+// the answer text as it arrives.
+function LiveAnswer({ live, mode }: { live: LiveTurn; mode: SearchMode }) {
+  const waiting = live.text.length === 0;
+  const running = live.steps.some((entry) => !entry.step);
+
+  return (
+    <div className="live-answer" aria-live="polite">
+      {live.steps.length > 0 ? (
+        <ul className="live-steps">
+          {live.steps.map((entry) => (
+            <li key={entry.id} className={entry.step ? "done" : "running"}>
+              {entry.step ? <CheckStepIcon /> : <span className="live-spinner" aria-hidden="true" />}
+              <span className="agent-step-text">
+                {entry.tool === "web_search" ? "Searching the web for" : "Searching your documents for"} &ldquo;
+                {entry.query}&rdquo;
+              </span>
+              {entry.step ? (
+                <span className="agent-step-count">
+                  {entry.step.resultCount ?? 0} result{entry.step.resultCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {waiting ? (
+        <div className="agent-thinking" aria-label="Aegis is working">
+          <div className="typing-bar">
+            <span />
+            <span />
+            <span />
+          </div>
+          <span className="agent-thinking-label">
+            {running
+              ? "Reading results…"
+              : live.steps.length > 0
+                ? "Writing the answer…"
+                : mode === "web"
+                  ? "Planning a web search…"
+                  : "Looking through your documents…"}
+          </span>
+        </div>
+      ) : (
+        <div className="message-content streaming">{renderMessageContent(live.text, live.sources)}</div>
+      )}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -349,6 +479,7 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [optimisticMessages, setOptimisticMessages] = useState<ChatResponse["messages"]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [live, setLive] = useState<LiveTurn | null>(null);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
   const closeDocuments = useCallback(() => setIsSourceModalOpen(false), []);
   const [mode, setMode] = useState<SearchMode>("web");
@@ -394,8 +525,27 @@ export default function Home() {
   useEffect(() => {
     const conversations = loadSavedConversations();
     setSavedConversations(conversations);
+    const { created: isNewWorkspace } = ensureWorkspaceId();
+    void (async () => {
+      // First visit since workspaces were introduced: bring this browser's
+      // earlier conversations along before listing history.
+      if (isNewWorkspace) {
+        const ids = [
+          ...conversations.map((conversation) => conversation.sessionId),
+          window.localStorage.getItem("aegis-session-id") ?? ""
+        ].filter(Boolean);
+        if (ids.length > 0) {
+          await apiFetch("/api/workspace/claim", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionIds: ids })
+          }).catch(() => undefined);
+        }
+      }
+
+      await loadConversationHistory();
+    })();
     void loadKnowledgeSources();
-    void loadConversationHistory();
 
     const existing = window.localStorage.getItem("aegis-session-id");
     if (existing) {
@@ -413,11 +563,11 @@ export default function Home() {
 
   useEffect(() => {
     conversationEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [response?.messages.length, optimisticMessages.length, isLoading]);
+  }, [response?.messages.length, optimisticMessages.length, isLoading, live?.steps.length, live?.text.length]);
 
   async function loadKnowledgeSources() {
     try {
-      const apiResponse = await fetch("/api/sources");
+      const apiResponse = await apiFetch("/api/sources");
       if (!apiResponse.ok) {
         return;
       }
@@ -431,7 +581,7 @@ export default function Home() {
 
   async function loadConversationHistory() {
     try {
-      const apiResponse = await fetch("/api/conversations");
+      const apiResponse = await apiFetch("/api/conversations");
       if (!apiResponse.ok) {
         return;
       }
@@ -476,11 +626,14 @@ export default function Home() {
     setOptimisticMessages([...messages, optimisticUserMessage]);
     setPrompt("");
 
+    setLive({ steps: [], text: "", sources: [] });
+
     try {
-      const apiResponse = await fetch("/api/chat", {
+      const apiResponse = await apiFetch("/api/chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson"
         },
         body: JSON.stringify({
           sessionId,
@@ -489,14 +642,57 @@ export default function Home() {
         })
       });
 
-      if (!apiResponse.ok) {
+      if (!apiResponse.ok || !apiResponse.body) {
         const body = (await apiResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? "Aegis could not complete the request.");
       }
 
-      const data = (await apiResponse.json()) as ChatResponse;
-      setResponse(data);
-      saveConversation(data, trimmedMessage);
+      let finished: ChatResponse | null = null;
+      let streamError = "";
+      await readEventStream(apiResponse.body, (event: AgentStreamEvent) => {
+        switch (event.type) {
+          case "tool_start":
+            setLive((current) =>
+              current && { ...current, steps: [...current.steps, { id: event.id, tool: event.tool, query: event.query }] }
+            );
+            break;
+          case "tool_end":
+            setLive((current) =>
+              current && {
+                ...current,
+                steps: current.steps.map((entry) => (entry.id === event.step.id ? { ...entry, step: event.step } : entry))
+              }
+            );
+            break;
+          case "sources":
+            setLive((current) => current && { ...current, sources: event.sources });
+            break;
+          case "delta":
+            setLive((current) => current && { ...current, text: current.text + event.text });
+            break;
+          case "reset":
+            setLive((current) => current && { ...current, text: "" });
+            break;
+          case "done":
+            finished = event.response;
+            break;
+          case "error":
+            streamError = event.error;
+            break;
+        }
+      });
+
+      if (streamError) {
+        throw new Error(streamError);
+      }
+
+      if (!finished) {
+        // The stream ended early: treat it like a dropped connection.
+        throw new TypeError("The answer stream ended unexpectedly.");
+      }
+
+      setResponse(finished);
+      saveConversation(finished, trimmedMessage);
     } catch (submissionError) {
       // A dropped connection (e.g. ERR_NETWORK_CHANGED) can still leave the
       // answer saved on the server, so check before calling it a failure.
@@ -515,13 +711,14 @@ export default function Home() {
       }
     } finally {
       setOptimisticMessages([]);
+      setLive(null);
       setIsLoading(false);
     }
   }
 
   async function recoverAnsweredTurn(targetSessionId: string, question: string) {
     try {
-      const apiResponse = await fetch(`/api/conversations/${encodeURIComponent(targetSessionId)}`);
+      const apiResponse = await apiFetch(`/api/conversations/${encodeURIComponent(targetSessionId)}`);
       if (!apiResponse.ok) {
         return false;
       }
@@ -590,7 +787,7 @@ export default function Home() {
     setNotice("");
 
     try {
-      const apiResponse = await fetch(`/api/conversations/${encodeURIComponent(nextSessionId)}`);
+      const apiResponse = await apiFetch(`/api/conversations/${encodeURIComponent(nextSessionId)}`);
       if (!apiResponse.ok) {
         return;
       }
@@ -620,7 +817,7 @@ export default function Home() {
     }
 
     try {
-      await fetch(`/api/conversations/${encodeURIComponent(conversation.sessionId)}`, {
+      await apiFetch(`/api/conversations/${encodeURIComponent(conversation.sessionId)}`, {
         method: "DELETE"
       });
     } catch {
@@ -752,7 +949,7 @@ export default function Home() {
                   >
                     <div className="message-body">
                       {run ? <AnswerMeta run={run} /> : null}
-                      <div className="message-content">{renderMessageContent(message.content)}</div>
+                      <div className="message-content">{renderMessageContent(message.content, run?.citations)}</div>
                       {run ? <SourceChips sources={run.citations} /> : null}
                     </div>
                   </article>
@@ -760,19 +957,10 @@ export default function Home() {
               })
             )}
 
-            {isLoading ? (
+            {isLoading && live ? (
               <article className="chat-message assistant-message">
                 <div className="message-body">
-                  <div className="agent-thinking" aria-label="Aegis is researching">
-                    <div className="typing-bar">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                    <span className="agent-thinking-label">
-                      {mode === "web" ? "Searching the web…" : "Searching your documents…"}
-                    </span>
-                  </div>
+                  <LiveAnswer live={live} mode={mode} />
                 </div>
               </article>
             ) : null}

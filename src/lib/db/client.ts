@@ -93,6 +93,14 @@ export async function ensurePostgresSchema() {
         ADD COLUMN IF NOT EXISTS brief JSONB;
       `);
 
+      // Sessions belong to one browser workspace (see src/lib/workspace.ts).
+      // Sessions from before workspaces existed have NULL until claimed.
+      await pool.query("ALTER TABLE aegis_sessions ADD COLUMN IF NOT EXISTS workspace_id TEXT;");
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS aegis_sessions_workspace_updated_idx
+        ON aegis_sessions (workspace_id, updated_at DESC);
+      `);
+
       await pool.query(`
         CREATE INDEX IF NOT EXISTS aegis_research_runs_session_created_idx
         ON aegis_research_runs (session_id, created_at DESC);

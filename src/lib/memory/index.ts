@@ -17,8 +17,8 @@ function sessionRunsKey(sessionId: string) {
   return `aegis:session:${sessionId}:runs`;
 }
 
-function conversationSummariesKey() {
-  return "aegis:conversations:summaries";
+function conversationSummariesKey(workspaceId: string) {
+  return `aegis:workspace:${workspaceId}:summaries`;
 }
 
 function parseMessage(entry: string) {
@@ -100,8 +100,10 @@ export async function appendMessages(sessionId: string, messages: ChatMessage[])
   }
 }
 
-export async function upsertConversationSummary(summary: ConversationSummary) {
-  getSessionState(summary.sessionId).summary = summary;
+export async function upsertConversationSummary(summary: ConversationSummary, workspaceId: string) {
+  const state = getSessionState(summary.sessionId);
+  state.summary = summary;
+  state.workspaceId ??= workspaceId;
 
   try {
     const redis = await getRedisClient();
@@ -110,7 +112,7 @@ export async function upsertConversationSummary(summary: ConversationSummary) {
       return;
     }
 
-    await redis.hSet(conversationSummariesKey(), summary.sessionId, JSON.stringify(summary));
+    await redis.hSet(conversationSummariesKey(workspaceId), summary.sessionId, JSON.stringify(summary));
   } catch {
     // Conversation history remains available from the in-process fallback.
   }
@@ -149,10 +151,10 @@ export async function loadConversationRuns(sessionId: string) {
   }
 }
 
-async function loadRedisSummaries() {
+async function loadRedisSummaries(workspaceId: string) {
   try {
     const redis = await getRedisClient();
-    return redis ? (await redis.hVals(conversationSummariesKey())).map(parseConversationSummary) : [];
+    return redis ? (await redis.hVals(conversationSummariesKey(workspaceId))).map(parseConversationSummary) : [];
   } catch {
     return [];
   }
@@ -160,16 +162,20 @@ async function loadRedisSummaries() {
 
 // Redis, Postgres, and this process can each be missing sessions the others
 // saved (a write can silently fall back), so the list is their union.
-export async function listConversationSummaries() {
+export async function listConversationSummaries(workspaceId: string) {
   const fallbackSummaries = listSessionStates()
+    .filter((state) => state.workspaceId === workspaceId)
     .map((state) => state.summary)
     .filter(Boolean) as ConversationSummary[];
-  const [redisSummaries, postgresSummaries] = await Promise.all([loadRedisSummaries(), listSessionSummaries()]);
+  const [redisSummaries, postgresSummaries] = await Promise.all([
+    loadRedisSummaries(workspaceId),
+    listSessionSummaries(workspaceId)
+  ]);
 
   return mergeConversationSummaries(redisSummaries, postgresSummaries, fallbackSummaries);
 }
 
-export async function deleteConversationMemory(sessionId: string) {
+export async function deleteConversationMemory(sessionId: string, workspaceId: string) {
   deleteSessionState(sessionId);
 
   try {
@@ -182,7 +188,7 @@ export async function deleteConversationMemory(sessionId: string) {
     await Promise.all([
       redis.del(sessionMessagesKey(sessionId)),
       redis.del(sessionRunsKey(sessionId)),
-      redis.hDel(conversationSummariesKey(), sessionId)
+      redis.hDel(conversationSummariesKey(workspaceId), sessionId)
     ]);
   } catch {
     // Deleting from the fallback store already removes it from the current process.

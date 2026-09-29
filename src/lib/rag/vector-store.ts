@@ -10,6 +10,7 @@ declare global {
 export type ChunkInsert = {
   id: string;
   sourceId: string;
+  workspaceId: string;
   source: ResearchSource;
   content: string;
   embedding: number[];
@@ -45,6 +46,13 @@ async function ensureVectorSchema(): Promise<boolean> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
         `);
+        // Documents belong to one workspace (see src/lib/workspace.ts). Rows
+        // written before workspaces existed have NULL and are never listed.
+        await pool.query("ALTER TABLE aegis_knowledge_chunks ADD COLUMN IF NOT EXISTS workspace_id TEXT;");
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS aegis_knowledge_chunks_workspace_idx
+          ON aegis_knowledge_chunks (workspace_id, source_id);
+        `);
         await pool.query(`
           CREATE INDEX IF NOT EXISTS aegis_knowledge_chunks_embedding_idx
           ON aegis_knowledge_chunks USING hnsw (embedding vector_cosine_ops);
@@ -76,8 +84,8 @@ export async function insertChunks(chunks: ChunkInsert[]): Promise<boolean> {
       await pool.query(
         `
           INSERT INTO aegis_knowledge_chunks
-            (id, source_id, title, url, domain, snippet, content, embedding)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+            (id, source_id, title, url, domain, snippet, content, embedding, workspace_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9)
           ON CONFLICT (id) DO NOTHING;
         `,
         [
@@ -88,7 +96,8 @@ export async function insertChunks(chunks: ChunkInsert[]): Promise<boolean> {
           chunk.source.domain,
           chunk.source.snippet,
           chunk.content,
-          toVectorLiteral(chunk.embedding)
+          toVectorLiteral(chunk.embedding),
+          chunk.workspaceId
         ]
       );
     }
@@ -98,9 +107,16 @@ export async function insertChunks(chunks: ChunkInsert[]): Promise<boolean> {
   }
 }
 
-// Cosine-similarity search. `<=>` is pgvector's cosine-distance operator, so
-// score = 1 - distance is the similarity (1 = identical).
-export async function searchChunks(queryEmbedding: number[], limit: number): Promise<RetrievalChunk[] | null> {
+// Cosine-similarity search within one workspace. `<=>` is pgvector's
+// cosine-distance operator, so score = 1 - distance is the similarity.
+// The workspace filter runs first (materialized CTE on the workspace index)
+// and ranking is exact: filtering *after* an approximate HNSW scan can drop
+// every row of a small workspace once many workspaces share the table.
+export async function searchChunks(
+  queryEmbedding: number[],
+  limit: number,
+  workspaceId: string
+): Promise<RetrievalChunk[] | null> {
   const pool = getPostgresPool();
   if (!pool || !(await ensureVectorSchema())) {
     return null;
@@ -118,13 +134,18 @@ export async function searchChunks(queryEmbedding: number[], limit: number): Pro
       score: string;
     }>(
       `
+        WITH workspace_chunks AS MATERIALIZED (
+          SELECT id, source_id, title, url, domain, snippet, content, embedding
+          FROM aegis_knowledge_chunks
+          WHERE workspace_id = $3
+        )
         SELECT id, source_id, title, url, domain, snippet, content,
                1 - (embedding <=> $1::vector) AS score
-        FROM aegis_knowledge_chunks
+        FROM workspace_chunks
         ORDER BY embedding <=> $1::vector
         LIMIT $2;
       `,
-      [toVectorLiteral(queryEmbedding), limit]
+      [toVectorLiteral(queryEmbedding), limit, workspaceId]
     );
 
     return result.rows.map((row) => ({
@@ -146,7 +167,7 @@ export async function searchChunks(queryEmbedding: number[], limit: number): Pro
   }
 }
 
-export async function listVectorSources(): Promise<ResearchSource[] | null> {
+export async function listVectorSources(workspaceId: string): Promise<ResearchSource[] | null> {
   const pool = getPostgresPool();
   if (!pool || !(await ensureVectorSchema())) {
     return null;
@@ -166,10 +187,11 @@ export async function listVectorSources(): Promise<ResearchSource[] | null> {
         SELECT DISTINCT ON (source_id)
           source_id, title, url, domain, snippet, created_at
         FROM aegis_knowledge_chunks
+        WHERE workspace_id = $1
         ORDER BY source_id, created_at DESC
       ) latest
       ORDER BY latest.created_at DESC;
-    `);
+    `, [workspaceId]);
 
     return result.rows.map((row) => ({
       id: row.source_id,
@@ -186,14 +208,17 @@ export async function listVectorSources(): Promise<ResearchSource[] | null> {
 
 // Removes every chunk of one document. Returns the number of chunks deleted,
 // or null if the vector store is unavailable.
-export async function deleteVectorSource(sourceId: string): Promise<number | null> {
+export async function deleteVectorSource(sourceId: string, workspaceId: string): Promise<number | null> {
   const pool = getPostgresPool();
   if (!pool || !(await ensureVectorSchema())) {
     return null;
   }
 
   try {
-    const result = await pool.query("DELETE FROM aegis_knowledge_chunks WHERE source_id = $1;", [sourceId]);
+    const result = await pool.query("DELETE FROM aegis_knowledge_chunks WHERE source_id = $1 AND workspace_id = $2;", [
+      sourceId,
+      workspaceId
+    ]);
     return result.rowCount ?? 0;
   } catch {
     return null;

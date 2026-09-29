@@ -1,5 +1,6 @@
 import { EMBEDDING_MODEL, embedText, embedTexts } from "@/lib/rag/embeddings";
 import { deleteVectorSource, insertChunks, listVectorSources, searchChunks, vectorStoreReady } from "@/lib/rag/vector-store";
+import { DEMO_WORKSPACE } from "@/lib/workspace";
 import type { ResearchSource, RetrievalChunk } from "@/types";
 
 export const ragConfig = {
@@ -7,15 +8,17 @@ export const ragConfig = {
   embeddingModel: EMBEDDING_MODEL
 };
 
+type StoredChunk = RetrievalChunk & { workspaceId: string };
+
 declare global {
-  var __aegisKnowledgeBase__: RetrievalChunk[] | undefined;
+  var __aegisKnowledgeBase__: StoredChunk[] | undefined;
 }
 
 // In-memory fallback store: used when pgvector/embeddings are unavailable.
 // Each document is kept whole here and matched with naive token overlap.
 // Kept on globalThis because every route handler is bundled separately, so a
 // module-level array would give each route its own, disconnected copy.
-const userKnowledgeBase: RetrievalChunk[] = (globalThis.__aegisKnowledgeBase__ ??= []);
+const userKnowledgeBase: StoredChunk[] = (globalThis.__aegisKnowledgeBase__ ??= []);
 
 // Chunking keeps embeddings focused and improves retrieval precision.
 const CHUNK_SIZE = 1200;
@@ -58,7 +61,15 @@ export function chunkText(text: string): string[] {
   return chunks;
 }
 
-export async function addKnowledgeDocument({ title, text }: { title: string; text: string }): Promise<ResearchSource> {
+export async function addKnowledgeDocument({
+  title,
+  text,
+  workspaceId = DEMO_WORKSPACE
+}: {
+  title: string;
+  text: string;
+  workspaceId?: string;
+}): Promise<ResearchSource> {
   const normalizedTitle = title.trim() || "Untitled source";
   const normalizedText = text.trim();
   const idSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -75,7 +86,7 @@ export async function addKnowledgeDocument({ title, text }: { title: string; tex
 
   // Always keep an in-memory copy so retrieval still works if the vector path
   // is unavailable on read (mirrors the project's degrade-gracefully pattern).
-  userKnowledgeBase.unshift({ id: `custom-${idSuffix}`, score: 0, text: normalizedText, source });
+  userKnowledgeBase.unshift({ id: `custom-${idSuffix}`, score: 0, text: normalizedText, source, workspaceId });
 
   // Vector path: chunk -> embed -> store in pgvector.
   if (await vectorStoreReady()) {
@@ -86,6 +97,7 @@ export async function addKnowledgeDocument({ title, text }: { title: string; tex
         pieces.map((content, index) => ({
           id: `${source.id}-chunk-${index}`,
           sourceId: source.id,
+          workspaceId,
           source,
           content,
           embedding: embeddings[index]
@@ -98,28 +110,33 @@ export async function addKnowledgeDocument({ title, text }: { title: string; tex
 }
 
 // Removes a document from both stores. Returns false if neither had it.
-export async function deleteKnowledgeDocument(sourceId: string): Promise<boolean> {
+export async function deleteKnowledgeDocument(sourceId: string, workspaceId = DEMO_WORKSPACE): Promise<boolean> {
   let removedFromMemory = false;
   for (let index = userKnowledgeBase.length - 1; index >= 0; index -= 1) {
-    if (userKnowledgeBase[index].source.id === sourceId) {
+    const chunk = userKnowledgeBase[index];
+    if (chunk.source.id === sourceId && chunk.workspaceId === workspaceId) {
       userKnowledgeBase.splice(index, 1);
       removedFromMemory = true;
     }
   }
 
-  const removedChunks = (await vectorStoreReady()) ? await deleteVectorSource(sourceId) : null;
+  const removedChunks = (await vectorStoreReady()) ? await deleteVectorSource(sourceId, workspaceId) : null;
   return removedFromMemory || (removedChunks ?? 0) > 0;
 }
 
-export async function listKnowledgeSources(): Promise<ResearchSource[]> {
+function workspaceChunks(workspaceId: string) {
+  return userKnowledgeBase.filter((chunk) => chunk.workspaceId === workspaceId);
+}
+
+export async function listKnowledgeSources(workspaceId = DEMO_WORKSPACE): Promise<ResearchSource[]> {
   if (await vectorStoreReady()) {
-    const sources = await listVectorSources();
+    const sources = await listVectorSources(workspaceId);
     if (sources && sources.length > 0) {
       return sources;
     }
   }
 
-  return userKnowledgeBase.map((chunk) => chunk.source);
+  return workspaceChunks(workspaceId).map((chunk) => chunk.source);
 }
 
 function scoreText(query: string, text: string) {
@@ -132,8 +149,9 @@ function scoreText(query: string, text: string) {
   }, 0);
 }
 
-function keywordRetrieve(query: string, limit: number): RetrievalChunk[] {
-  const scoredChunks = userKnowledgeBase
+function keywordRetrieve(query: string, limit: number, workspaceId: string): RetrievalChunk[] {
+  const candidates = workspaceChunks(workspaceId).map(({ workspaceId: _workspaceId, ...chunk }) => chunk);
+  const scoredChunks = candidates
     .map((chunk) => ({
       ...chunk,
       score: scoreText(query, `${chunk.text} ${chunk.source.title} ${chunk.source.snippet}`)
@@ -145,19 +163,19 @@ function keywordRetrieve(query: string, limit: number): RetrievalChunk[] {
     return scoredChunks.filter((chunk) => chunk.score > 0);
   }
 
-  return userKnowledgeBase.slice(0, limit);
+  return candidates.slice(0, limit);
 }
 
 // Default depth of 6. Three ~1200-char chunks is not enough evidence for a
 // multi-part question over a long document, and duplicate ingestions of the
 // same file (which the app allows) can consume half the slots with identical
 // text — see docs/eval-findings.md.
-export async function retrieveKnowledge(query: string, limit = 6): Promise<RetrievalChunk[]> {
+export async function retrieveKnowledge(query: string, limit = 6, workspaceId = DEMO_WORKSPACE): Promise<RetrievalChunk[]> {
   // Semantic retrieval via pgvector when available.
   if (await vectorStoreReady()) {
     const queryEmbedding = await embedText(query);
     if (queryEmbedding) {
-      const hits = await searchChunks(queryEmbedding, limit);
+      const hits = await searchChunks(queryEmbedding, limit, workspaceId);
       if (hits && hits.length > 0) {
         return hits;
       }
@@ -165,5 +183,5 @@ export async function retrieveKnowledge(query: string, limit = 6): Promise<Retri
   }
 
   // Fallback: in-memory token-overlap scoring.
-  return keywordRetrieve(query, limit);
+  return keywordRetrieve(query, limit, workspaceId);
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { enforceRateLimit, requireWorkspace } from "@/lib/api";
 import { deleteKnowledgeDocument, listKnowledgeSources } from "@/lib/rag";
 
 type RouteContext = {
@@ -7,9 +8,19 @@ type RouteContext = {
   }>;
 };
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  const workspace = requireWorkspace(request);
+  if ("response" in workspace) {
+    return workspace.response;
+  }
+
+  const limited = await enforceRateLimit(request, "write");
+  if (limited) {
+    return limited;
+  }
+
   const { sourceId } = await context.params;
-  const deleted = await deleteKnowledgeDocument(sourceId);
+  const deleted = await deleteKnowledgeDocument(sourceId, workspace.workspaceId);
 
   if (!deleted) {
     return NextResponse.json(
@@ -23,6 +34,6 @@ export async function DELETE(_request: Request, context: RouteContext) {
   return NextResponse.json({
     deleted: true,
     sourceId,
-    sources: await listKnowledgeSources()
+    sources: await listKnowledgeSources(workspace.workspaceId)
   });
 }

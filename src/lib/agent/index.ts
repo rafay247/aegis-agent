@@ -1,5 +1,6 @@
 import { listResearchRuns, saveChatMessages, saveResearchRun } from "@/lib/db";
 import { mergeRuns } from "@/lib/history";
+import { DEMO_WORKSPACE } from "@/lib/workspace";
 import { callChatModel, hasOpenAiConfig } from "@/lib/agent/openai";
 import type { ChatModelMessage, ChatTool } from "@/lib/agent/openai";
 import {
@@ -16,6 +17,7 @@ import { searchWeb } from "@/lib/tools";
 import type {
   AgentPlan,
   AgentStep,
+  AgentStreamEvent,
   ChatMessage,
   ChatRequest,
   ChatResponse,
@@ -39,7 +41,7 @@ const AGENT_SYSTEM_PROMPT = [
   "Decide for yourself whether you need to look things up. Call web_search for anything current, factual, statistical, or that you are not fully certain about. Call search_knowledge to consult the user's own uploaded documents and notes.",
   "You may call tools more than once to refine or broaden your research. Before answering, check that the retrieved evidence actually covers every part of the question — a question with two or more parts usually needs one search per part. If a part is not covered, search again with different wording (narrower, or using the source's own terminology) instead of answering that part from memory.",
   "Ground every claim in the retrieved evidence. If, after refining, the evidence still does not cover part of the question, say plainly what you could not find rather than filling the gap from prior knowledge. Once the evidence covers the question, stop calling tools and write the answer.",
-  "Write a clear, direct answer in natural prose (1-3 short paragraphs; use bullets only when they genuinely help). Put inline citations like [1] or [2] immediately after the claims they support, matching the numbered sources returned by the tools.",
+  "Write a clear, direct answer in natural prose (1-3 short paragraphs; use bullets only when they genuinely help). Put inline citations like [1] or [2] immediately after the claims they support, matching the numbered sources returned by the tools. Every sentence that relies on a retrieved source needs its citation — an answer built on tool results with no [n] markers is incomplete.",
   "Do not add a separate 'Sources' or 'Links' section; the interface shows the sources on its own. If you could not find reliable information, say so honestly. Never invent facts or URLs."
 ].join(" ");
 
@@ -259,14 +261,49 @@ export function createSourceRegistry() {
 
 // The ReAct loop: the model reasons, optionally calls tools, observes the
 // results, and repeats until it decides to answer (or hits the iteration cap).
+export type AgentRunOptions = {
+  workspaceId?: string;
+  // Receives progress as it happens (see AgentStreamEvent); used to stream.
+  onEvent?: (event: AgentStreamEvent) => void;
+};
+
 export async function runReactAgent(
   question: string,
   memory: ChatMessage[],
   allowWeb: boolean,
-  knowledgeCount: number
+  knowledgeCount: number,
+  { workspaceId = DEMO_WORKSPACE, onEvent }: AgentRunOptions = {}
 ): Promise<AgentResult> {
   const { sources, registerSources } = createSourceRegistry();
   const steps: AgentStep[] = [];
+
+  // Calls the model, streaming its answer text to onEvent when streaming.
+  async function callModel(modelTools: ChatTool[], iteration: number) {
+    let streamedText = false;
+    const reply = await tracedSpan(
+      "agent.model_call",
+      () =>
+        callChatModel(
+          messages,
+          modelTools,
+          onEvent
+            ? {
+                onTextDelta: (text) => {
+                  streamedText = true;
+                  onEvent({ type: "delta", text });
+                }
+              }
+            : {}
+        ),
+      { iteration }
+    );
+
+    if (streamedText && (reply.tool_calls?.length ?? 0) > 0) {
+      onEvent?.({ type: "reset" });
+    }
+
+    return reply;
+  }
 
   const tools = agentToolsFor(allowWeb);
 
@@ -286,7 +323,7 @@ export async function runReactAgent(
   ];
 
   for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration += 1) {
-    const reply = await tracedSpan("agent.model_call", () => callChatModel(messages, tools), { iteration });
+    const reply = await callModel(tools, iteration);
     messages.push(reply);
 
     const toolCalls = reply.tool_calls ?? [];
@@ -304,12 +341,16 @@ export async function runReactAgent(
       }
 
       const startedAt = new Date();
+      const stepId = createId("step");
+      if (call.function.name === "web_search" || call.function.name === "search_knowledge") {
+        onEvent?.({ type: "tool_start", id: stepId, tool: call.function.name, query });
+      }
 
       if (call.function.name === "web_search") {
         const found = allowWeb ? await tracedSpan("tool.web_search", () => searchWeb(query), { query }) : [];
         const observation = registerSources(found);
         steps.push({
-          id: createId("step"),
+          id: stepId,
           kind: "tool",
           tool: "web_search",
           input: query,
@@ -320,22 +361,26 @@ export async function runReactAgent(
           durationMs: Date.now() - startedAt.getTime()
         });
         messages.push({ role: "tool", tool_call_id: call.id, content: observation });
+        onEvent?.({ type: "tool_end", step: steps[steps.length - 1] });
+        onEvent?.({ type: "sources", sources: [...sources] });
       } else if (call.function.name === "search_knowledge") {
-        const chunks = await tracedSpan("tool.search_knowledge", () => retrieveKnowledge(query), { query });
+        const chunks = await tracedSpan("tool.search_knowledge", () => retrieveKnowledge(query, 6, workspaceId), { query });
         const found = chunks.map((chunk) => ({ ...chunk.source, content: chunk.text }));
         const observation = registerSources(found);
         steps.push({
-          id: createId("step"),
+          id: stepId,
           kind: "tool",
           tool: "search_knowledge",
           input: query,
-          summary: `Searched your sources for "${query}"`,
+          summary: `Searched your documents for "${query}"`,
           resultCount: found.length,
           observation,
           startedAt: startedAt.toISOString(),
           durationMs: Date.now() - startedAt.getTime()
         });
         messages.push({ role: "tool", tool_call_id: call.id, content: observation });
+        onEvent?.({ type: "tool_end", step: steps[steps.length - 1] });
+        onEvent?.({ type: "sources", sources: [...sources] });
       } else {
         messages.push({ role: "tool", tool_call_id: call.id, content: "No results found for that query." });
       }
@@ -346,14 +391,14 @@ export async function runReactAgent(
     role: "user",
     content: "Give your best final answer now using what you have gathered, with inline [n] citations."
   });
-  const finalReply = await tracedSpan("agent.model_call", () => callChatModel(messages, []), { iteration: MAX_AGENT_ITERATIONS });
+  const finalReply = await callModel([], MAX_AGENT_ITERATIONS);
   steps.push({ id: createId("step"), kind: "answer", summary: "Wrote the final answer" });
   return { text: (finalReply.content ?? "").trim(), citations: sources, steps };
 }
 
 // Deterministic fallback when no LLM is configured (or the model call fails):
 // run the toggled tool and surface the cleanest excerpt.
-async function runFallback(question: string, allowWeb: boolean): Promise<AgentResult> {
+async function runFallback(question: string, allowWeb: boolean, workspaceId: string): Promise<AgentResult> {
   const plan = buildPlan(question, allowWeb);
   const steps: AgentStep[] = [];
 
@@ -370,7 +415,7 @@ async function runFallback(question: string, allowWeb: boolean): Promise<AgentRe
   }
 
   const knowledgeSources = plan.useRag
-    ? (await retrieveKnowledge(question)).map((chunk) => ({ ...chunk.source, content: chunk.text }))
+    ? (await retrieveKnowledge(question, 6, workspaceId)).map((chunk) => ({ ...chunk.source, content: chunk.text }))
     : [];
   if (plan.useRag) {
     steps.push({
@@ -378,7 +423,7 @@ async function runFallback(question: string, allowWeb: boolean): Promise<AgentRe
       kind: "tool",
       tool: "search_knowledge",
       input: question,
-      summary: `Searched your sources for "${question}"`,
+      summary: `Searched your documents for "${question}"`,
       resultCount: knowledgeSources.length
     });
   }
@@ -405,31 +450,37 @@ function derivePlan(steps: AgentStep[], usedModel: string, allowWeb: boolean): A
   };
 }
 
-export async function runAgent(request: ChatRequest): Promise<ChatResponse> {
+export async function runAgent(
+  request: ChatRequest,
+  workspaceId: string,
+  onEvent?: (event: AgentStreamEvent) => void
+): Promise<ChatResponse> {
   const sessionId = request.sessionId;
   const recentMessages = await loadRecentMessages(sessionId);
   const allowWeb = Boolean(request.useWebSearch);
-  const knowledgeCount = (await listKnowledgeSources()).length;
+  const knowledgeCount = (await listKnowledgeSources(workspaceId)).length;
 
   let result: AgentResult;
   let usedModel: string;
 
   if (hasOpenAiConfig()) {
     try {
-      result = await runReactAgent(request.message, recentMessages, allowWeb, knowledgeCount);
+      result = await runReactAgent(request.message, recentMessages, allowWeb, knowledgeCount, { workspaceId, onEvent });
       usedModel = "openai-react-agent";
 
       // If the model produced an empty answer, degrade to the deterministic path.
       if (!result.text) {
-        result = await runFallback(request.message, allowWeb);
+        onEvent?.({ type: "reset" });
+        result = await runFallback(request.message, allowWeb, workspaceId);
         usedModel = "local-fallback";
       }
     } catch {
-      result = await runFallback(request.message, allowWeb);
+      onEvent?.({ type: "reset" });
+      result = await runFallback(request.message, allowWeb, workspaceId);
       usedModel = "local-fallback";
     }
   } else {
-    result = await runFallback(request.message, allowWeb);
+    result = await runFallback(request.message, allowWeb, workspaceId);
     usedModel = "local-fallback";
   }
 
@@ -475,11 +526,14 @@ export async function runAgent(request: ChatRequest): Promise<ChatResponse> {
   const [memoryRuns, databaseRuns] = await Promise.all([loadConversationRuns(sessionId), listResearchRuns(sessionId)]);
   const runs = mergeRuns([run], memoryRuns, databaseRuns).filter((entry) => !entry.brief);
 
-  await upsertConversationSummary({
-    sessionId,
-    title: firstUserMessage.slice(0, 64),
-    updatedAt: assistantMessage.createdAt
-  });
+  await upsertConversationSummary(
+    {
+      sessionId,
+      title: firstUserMessage.slice(0, 64),
+      updatedAt: assistantMessage.createdAt
+    },
+    workspaceId
+  );
 
   return {
     sessionId,

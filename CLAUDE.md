@@ -58,13 +58,18 @@ Pools and clients are cached on `globalThis` (`__aegis*__`) to avoid exhausting 
 
 ### API surface
 
-- `POST /api/chat` — main agent turn (requires `sessionId` + `message`).
-- `GET /api/conversations` — list conversation summaries.
-- `POST /api/brief` — structured brief run ([runBrief](src/lib/agent/brief.ts)); same ReAct loop with a four-section output contract (Overview / Key Findings / Gaps & Limitations / Conclusion).
-- `GET|DELETE /api/conversations/[sessionId]` — load full history (reconstructs a `ChatResponse` from the latest **non-brief** run — brief runs share the session's run list but belong to the Brief panel) / delete from all stores.
-- `GET|POST /api/sources` — list / add a text knowledge document.
-- `POST /api/sources/pdf` — upload up to 3 PDFs; text extracted with `pdfjs-dist` legacy build (max via `maxPdfSources`).
+Every route except `/api/health` requires an `x-aegis-workspace` header (an anonymous per-browser id from [src/lib/client/api.ts](src/lib/client/api.ts); validated in [src/lib/workspace.ts](src/lib/workspace.ts)). Documents are stored per workspace, and a conversation belongs to the workspace that started it — other workspaces get 404 ([src/lib/session-access.ts](src/lib/session-access.ts)). Write routes are rate limited per IP in Redis ([src/lib/rate-limit.ts](src/lib/rate-limit.ts), fails open without Redis) and return 429 with `Retry-After`. Guards live in [src/lib/api.ts](src/lib/api.ts).
+
+- `POST /api/chat` — main agent turn (requires `sessionId` + `message`). With `Accept: application/x-ndjson` it streams `AgentStreamEvent`s (tool start/end, sources, text deltas, `done` with the full `ChatResponse`); otherwise plain JSON.
+- `GET /api/conversations` — list this workspace's conversation summaries.
+- `POST /api/brief` — structured brief run ([runBrief](src/lib/agent/brief.ts)); no longer exposed in the UI.
+- `GET|DELETE /api/conversations/[sessionId]` — load full history (returns every chat run as `runs`, so each answer keeps its sources) / delete from all stores.
+- `GET|POST /api/sources` — list / add a text knowledge document; `DELETE /api/sources/[sourceId]` removes one.
+- `POST /api/sources/pdf` — upload up to 3 PDFs; text extracted with `pdfjs-dist` legacy build (needs `@napi-rs/canvas` traced into the bundle — see [next.config.ts](next.config.ts)).
+- `POST /api/workspace/claim` — one-time migration: moves sessions created before workspaces (NULL owner) into the caller's workspace.
 - `GET /api/health` — liveness.
+
+The eval harness and `npm run seed:knowledge` use the fixed `DEMO_WORKSPACE`.
 
 ### Conventions & gotchas
 

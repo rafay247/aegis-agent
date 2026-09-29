@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { enforceRateLimit, requireWorkspace } from "@/lib/api";
 import { deleteSessionData, listResearchRuns } from "@/lib/db";
 import { deleteConversationMemory, loadConversationMessages, loadConversationRuns } from "@/lib/memory";
 import { mergeRuns } from "@/lib/history";
+import { sessionBelongsToWorkspace } from "@/lib/session-access";
 import type { AgentPlan, ChatResponse } from "@/types";
 
 const emptyPlan: AgentPlan = {
@@ -17,8 +19,19 @@ type RouteContext = {
   }>;
 };
 
-export async function GET(_request: Request, context: RouteContext) {
+const notFound = () => NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+
+export async function GET(request: Request, context: RouteContext) {
+  const workspace = requireWorkspace(request);
+  if ("response" in workspace) {
+    return workspace.response;
+  }
+
   const { sessionId } = await context.params;
+  if (!(await sessionBelongsToWorkspace(sessionId, workspace.workspaceId))) {
+    return notFound();
+  }
+
   const messages = await loadConversationMessages(sessionId);
   // Redis and Postgres can each be missing runs the other saved.
   const [memoryRuns, databaseRuns] = await Promise.all([loadConversationRuns(sessionId), listResearchRuns(sessionId)]);
@@ -63,11 +76,24 @@ export async function GET(_request: Request, context: RouteContext) {
   return NextResponse.json(response);
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  const workspace = requireWorkspace(request);
+  if ("response" in workspace) {
+    return workspace.response;
+  }
+
+  const limited = await enforceRateLimit(request, "write");
+  if (limited) {
+    return limited;
+  }
+
   const { sessionId } = await context.params;
+  if (!(await sessionBelongsToWorkspace(sessionId, workspace.workspaceId))) {
+    return notFound();
+  }
 
   await Promise.all([
-    deleteConversationMemory(sessionId),
+    deleteConversationMemory(sessionId, workspace.workspaceId),
     deleteSessionData(sessionId)
   ]);
 

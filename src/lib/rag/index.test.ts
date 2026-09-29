@@ -30,3 +30,18 @@ test("deleteKnowledgeDocument removes a document so it is neither listed nor ret
   assert.ok(!retrievedIds.includes(removed.id));
   assert.equal(await deleteKnowledgeDocument(removed.id), false);
 });
+
+test("documents are isolated per workspace: listing, retrieval and deletion", async () => {
+  const mine = await addKnowledgeDocument({ title: "Mine", text: "Quokkas live on Rottnest Island.", workspaceId: "workspace-aaaaaaaaaaaaaaaa" });
+  const theirs = await addKnowledgeDocument({ title: "Theirs", text: "Quokkas are marsupials.", workspaceId: "workspace-bbbbbbbbbbbbbbbb" });
+
+  const listed = (await listKnowledgeSources("workspace-aaaaaaaaaaaaaaaa")).map((source) => source.id);
+  assert.ok(listed.includes(mine.id));
+  assert.ok(!listed.includes(theirs.id));
+
+  const retrieved = (await retrieveKnowledge("quokkas", 6, "workspace-aaaaaaaaaaaaaaaa")).map((chunk) => chunk.source.id);
+  assert.ok(!retrieved.includes(theirs.id));
+
+  assert.equal(await deleteKnowledgeDocument(theirs.id, "workspace-aaaaaaaaaaaaaaaa"), false, "cannot delete another workspace's document");
+  assert.ok((await listKnowledgeSources("workspace-bbbbbbbbbbbbbbbb")).some((source) => source.id === theirs.id));
+});

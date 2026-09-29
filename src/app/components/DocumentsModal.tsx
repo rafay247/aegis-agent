@@ -1,6 +1,7 @@
 "use client";
 
 import { DragEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 import type { ResearchSource } from "@/types";
 
 const maxPdfFiles = 3;
@@ -170,7 +171,7 @@ export function DocumentsModal({ sources, onSourcesChange, onClose }: DocumentsM
     try {
       const formData = new FormData();
       files.forEach((file) => formData.append("files", file));
-      const response = await fetch("/api/sources/pdf", { method: "POST", body: formData });
+      const response = await apiFetch("/api/sources/pdf", { method: "POST", body: formData });
       const body = await readJson(response);
 
       if (body.sources) {
@@ -207,7 +208,7 @@ export function DocumentsModal({ sources, onSourcesChange, onClose }: DocumentsM
     setStatus({ kind: "working", message: "Saving your document…" });
 
     try {
-      const response = await fetch("/api/sources", {
+      const response = await apiFetch("/api/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, text })
@@ -243,7 +244,7 @@ export function DocumentsModal({ sources, onSourcesChange, onClose }: DocumentsM
 
     setRemovingId(source.id);
     try {
-      const response = await fetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
       const body = await readJson(response);
       if (!response.ok) {
         throw new Error(body.error ?? "The document couldn't be removed.");
